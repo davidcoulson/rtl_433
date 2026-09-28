@@ -20,8 +20,13 @@ What makes a battery swap recognisable is that every clue lines up at once, and
 - **The candidate is real:** heard at least :data:`MIN_SIGHTINGS` times, so a
   single bad decode (or the id a sensor showed for a moment while its batteries
   were being seated) never qualifies.
-- **The reading carries on,** when both report a temperature: the candidate's is
-  within :data:`TEMPERATURE_TOLERANCE_C` of the old device's last one.
+- **The readings carry on.** Where both report a temperature, the candidate's
+  is within :data:`TEMPERATURE_TOLERANCE_C` of the old device's last one; where
+  both report humidity, within :data:`HUMIDITY_TOLERANCE`. Only slow-moving
+  quantities are compared, with absolute tolerances: a percentage breaks down
+  near zero and changes with the unit, counters (rain, consumption) often reset
+  when the batteries come out, and wind or light move too fast to tell two
+  sensors apart. A device reporting none of these is matched on the other clues.
 - **Unambiguous in both directions.** Exactly one candidate fits the old device,
   and that candidate fits no other quiet device of the same kind. Two identical
   sensors changing batteries at once is precisely when guessing would be wrong,
@@ -30,8 +35,14 @@ What makes a battery swap recognisable is that every clue lines up at once, and
 What happens to a match depends on the device's :data:`.const.DEVICE_AUTO_REPLACE`
 setting. Off (the default): a fixable repair issue names the device, its old id
 and the new one, and confirming it runs the replace. On: the replace runs
-straight away. Either way, a successful replace fires
-:data:`EVENT_DEVICE_ID_CHANGED` so an automation can tell the user.
+straight away -- but only when the candidate first appeared within
+:data:`FOLLOW_WINDOW` of the old device's last frame, as it does when batteries
+are changed. Silence has no upper bound, so without that limit a sensor that died
+months ago would be paired with whichever identical sensor turned up next, a
+neighbour's for instance. A longer (or, after a restart, unknown) gap still
+raises the repair, so a device re-batteried long after it died is offered, not
+taken. Either way, a successful replace fires :data:`EVENT_DEVICE_ID_CHANGED` so
+an automation can tell the user.
 
 Evaluation is cheap and purely in memory, so it runs whenever the pending list
 changes (a new candidate) and on a short interval (a device's silence crossing
@@ -86,6 +97,17 @@ MIN_SIGHTINGS: Final = 2
 # further from a fridge probe than this.
 TEMPERATURE_TOLERANCE_C: Final = 10.0
 
+# How far the candidate's relative humidity may be from the old device's last
+# reading, in percentage points. A hand and a room's air move it quickly, so this
+# is loose too; it still separates an indoor sensor from an outdoor one on most
+# days.
+HUMIDITY_TOLERANCE: Final = 20.0
+
+# Automatic follows only: the longest gap between the old device's last frame and
+# the candidate's first. A battery swap takes minutes; an hour covers a swap
+# interrupted by a trip to the shops, and anything longer is asked about instead.
+FOLLOW_WINDOW: Final = timedelta(hours=1)
+
 # How often the silence side is re-evaluated.
 EVALUATE_INTERVAL: Final = timedelta(minutes=1)
 
@@ -105,6 +127,14 @@ class IdChange:
     old_temperature: float | None = None
     new_temperature: float | None = None
     signal: float | None = None
+    # Old device's last frame -> candidate's first; ``None`` when the old device
+    # has not been heard since the hub connected (a restart), so it is unknown.
+    gap: timedelta | None = None
+
+    @property
+    def may_follow_automatically(self) -> bool:
+        """Whether the gap is short enough to follow without asking."""
+        return self.gap is not None and self.gap <= FOLLOW_WINDOW
 
 
 def _kind(model: str, key: str) -> tuple[str, ...] | None:
@@ -124,17 +154,46 @@ def _kind(model: str, key: str) -> tuple[str, ...] | None:
     return (safe_token(model), *parts[1:])
 
 
+def _number(fields: dict[str, Any] | None, key: str) -> float | None:
+    """``fields[key]`` as a float when it is a real number, else ``None``."""
+    value = (fields or {}).get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def _temperature(fields: dict[str, Any] | None) -> float | None:
     """The device's temperature in degrees C when it reports one, else ``None``."""
-    if not fields:
-        return None
-    value = fields.get("temperature_C")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        value = fields.get("temperature_F")
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        return (float(value) - 32.0) * 5.0 / 9.0
-    return float(value)
+    celsius = _number(fields, "temperature_C")
+    if celsius is not None:
+        return celsius
+    fahrenheit = _number(fields, "temperature_F")
+    return None if fahrenheit is None else (fahrenheit - 32.0) * 5.0 / 9.0
+
+
+def _humidity(fields: dict[str, Any] | None) -> float | None:
+    """The device's relative humidity in percent when it reports one."""
+    return _number(fields, "humidity")
+
+
+# The slow-moving readings compared between the old device and a candidate, each
+# with its absolute tolerance. A pair is rejected when any reading both sides
+# report differs by more than its tolerance.
+_READINGS: Final = (
+    (_temperature, TEMPERATURE_TOLERANCE_C),
+    (_humidity, HUMIDITY_TOLERANCE),
+)
+
+
+def _readings_agree(
+    old_fields: dict[str, Any] | None, new_fields: dict[str, Any] | None
+) -> bool:
+    """Whether every reading both devices report is within its tolerance."""
+    for read, tolerance in _READINGS:
+        old, new = read(old_fields), read(new_fields)
+        if old is not None and new is not None and abs(new - old) > tolerance:
+            return False
+    return True
 
 
 def find_id_changes(
@@ -171,25 +230,21 @@ def find_id_changes(
         quiet_since = heard or connected_since
         if quiet_since is None or now - quiet_since < SILENCE:
             continue
-        old_temperature = _temperature(last_event.fields if last_event else None)
+        old_fields = last_event.fields if last_event else None
         for pending in candidates[kind]:
             if heard is not None and heard >= pending.first_seen:
                 # Still transmitting after the candidate appeared: two devices.
                 continue
-            new_temperature = _temperature(pending.fields)
-            if (
-                old_temperature is not None
-                and new_temperature is not None
-                and abs(new_temperature - old_temperature) > TEMPERATURE_TOLERANCE_C
-            ):
+            if not _readings_agree(old_fields, pending.fields):
                 continue
             pairs.append(
                 IdChange(
                     old_key=old_key,
                     new_key=pending.key,
-                    old_temperature=old_temperature,
-                    new_temperature=new_temperature,
+                    old_temperature=_temperature(old_fields),
+                    new_temperature=_temperature(pending.fields),
                     signal=pending.signal,
+                    gap=None if heard is None else pending.first_seen - heard,
                 )
             )
 
@@ -221,6 +276,17 @@ def _device_name(hass: HomeAssistant, entry: ConfigEntry, key: str) -> str:
     return device.name_by_user or device.name or key
 
 
+def _duration(gap: timedelta | None) -> str:
+    """A gap as the repair card shows it: minutes, then hours, then days."""
+    if gap is None:
+        return "an unknown time"
+    minutes = max(0, round(gap.total_seconds() / 60))
+    if minutes < 120:
+        return f"{minutes} min"
+    hours = round(minutes / 60)
+    return f"{hours} h" if hours < 48 else f"{round(hours / 24)} days"
+
+
 def _placeholders(
     hass: HomeAssistant, entry: ConfigEntry, change: IdChange
 ) -> dict[str, str]:
@@ -236,6 +302,7 @@ def _placeholders(
         "old_temperature": _temp(change.old_temperature),
         "new_temperature": _temp(change.new_temperature),
         "signal": "unknown" if change.signal is None else f"{change.signal:.1f} dB",
+        "gap": _duration(change.gap),
     }
 
 
@@ -298,7 +365,7 @@ def async_track_id_changes(
         live: set[str] = set()
         for change in find_id_changes(entry, coordinator, dt_util.utcnow()):
             record = entry.data.get(CONF_DEVICES, {}).get(change.old_key, {})
-            if record.get(DEVICE_AUTO_REPLACE):
+            if record.get(DEVICE_AUTO_REPLACE) and change.may_follow_automatically:
                 following.add(change.old_key)
                 hass.async_create_task(
                     _async_follow_automatically(change),

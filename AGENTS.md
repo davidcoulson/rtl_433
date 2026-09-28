@@ -211,11 +211,13 @@ The integration is **rfxtrx-style**, not Battery-Notes-style:
 - `id_change.py` decides **when** to offer that replace. `find_id_changes` pairs
   an added device that has been silent for `SILENCE` with a pending candidate of
   the same model/channel/subtype (only the id differs), heard `MIN_SIGHTINGS`
-  times, first heard after the old device went quiet, reading a similar
-  temperature, and unambiguous in both directions. A match raises a fixable
+  times, first heard after the old device went quiet, with similar slow-moving
+  readings (`_READINGS`: temperature and humidity, absolute tolerances), and
+  unambiguous in both directions. A match raises a fixable
   `device_id_changed_<entry>_<key>` repair (`DeviceIdChangedRepairFlow`), or --
-  when the device record has `auto_replace: true` -- runs the replace straight
-  away. Both paths go through `async_replace_device` and fire
+  when the device record has `auto_replace: true` and the gap between the old
+  device's last frame and the candidate's first is within `FOLLOW_WINDOW` --
+  runs the replace straight away. Both paths go through `async_replace_device` and fire
   `rtl_433_device_id_changed`. The matcher is deliberately conservative: when in
   doubt it does nothing, because a wrong automatic re-key splices a stranger's
   readings into the user's history.

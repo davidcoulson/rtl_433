@@ -38,8 +38,10 @@ A candidate only counts as a replacement when every clue agrees:
 - It has been **heard at least twice**, so a single bad decode never qualifies.
 - It **first appeared after the old device went quiet**. A neighbour's sensor of
   the same model transmits while yours still does, which rules it out.
-- When both report a temperature, the new reading is **within 10 °C** of the old
-  device's last one.
+- The **readings carry on**. When both report a temperature, the new one is
+  within 10 °C of the old device's last one. When both report humidity, it is
+  within 20 percentage points. Sensors with neither, like door or motion
+  sensors, are matched on the other clues.
 - The match is **unambiguous**. If two candidates could replace one device, or
   one candidate could replace two quiet devices, nothing is suggested and you
   choose on the **Add or replace device** page as before.
@@ -53,6 +55,17 @@ device's settings (the **rtl_433** panel, or the integration's **Configure** →
 **Device settings**) and turn on **Follow ID changes automatically**. When a match
 is found for that device, it is replaced straight away. The setting moves with the
 device, so the next battery change is followed too.
+
+Automatic follows only happen when the new ID first appeared **within an hour** of
+the old one's last transmission, as it does when you change the batteries. A
+sensor that died long ago could otherwise be paired with whichever identical
+sensor turns up next, such as a neighbour's. For a longer gap, or when Home
+Assistant restarted in between, you get the repair instead. The repair card says
+how long the device was quiet before the new ID appeared.
+
+If you have two identical sensors on the same channel, change their batteries one
+at a time. When both go quiet together, the new IDs fit either one, so nothing is
+matched and you choose on the **Add or replace device** page.
 
 Every replace made this way, whether automatic or confirmed from a repair, fires an
 `rtl_433_device_id_changed` event. You can use it to be told when it happens:

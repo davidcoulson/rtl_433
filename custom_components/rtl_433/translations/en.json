@@ -150,7 +150,7 @@
           "timeout_override": "Mark this device unavailable after this many seconds without an event. Use 0 to never mark it unavailable. Leave blank to use the automatic default for this device's type (longer for door/window/motion sensors).",
           "commodity": "What this meter measures. Pick Energy, Gas, or Water to calibrate the consumption sensor (next step) so it works in the Energy dashboard. Pick None to leave it unitless (and clear any existing calibration).",
           "motion_clear_delay": "For a motion sensor, auto-clear it to off this many seconds after the last motion. Leave blank to use the default.",
-          "auto_replace": "Many sensors pick a new ID when their batteries are changed. When this device goes quiet and exactly one new device of the same model and channel appears with a similar reading, switch this device over to it without asking. Off: you are asked first, in Repairs."
+          "auto_replace": "Many sensors pick a new ID when their batteries are changed. When this device goes quiet and, within an hour, exactly one new device of the same model and channel appears with similar readings, switch this device over to it without asking. Longer gaps, and this setting off, ask first in Repairs."
         }
       },
       "mappings": {
@@ -286,7 +286,7 @@
           "device_id_change_failed": "The device could not be switched to its new ID. Try Replace from the rtl_433 page."
         }
       },
-      "description": "{device} ({old_key}) has gone quiet and {new_key} looks like the same sensor under a new ID: same model and channel, last reading {old_temperature}, new one {new_temperature}, signal {signal}. Open this card to switch {device} over."
+      "description": "{device} ({old_key}) has gone quiet and {new_key} looks like the same sensor under a new ID: same model and channel, last reading {old_temperature}, new one {new_temperature}, signal {signal}. It first appeared {gap} after {device} went quiet. Open this card to switch {device} over."
     }
   },
   "config_panel": {
@@ -410,7 +410,7 @@
         "commodity": "Setting a commodity turns this device's counter into an Energy-dashboard sensor. “none” leaves it as the library describes it.",
         "unit": "One unit of what the counter counts.",
         "scale": "Multiplier on the raw counter, to reach one base unit.",
-        "auto_replace": "Switch this device to its new ID after a battery change without asking, when exactly one match appears. Off: you are asked in Repairs."
+        "auto_replace": "Switch this device to its new ID after a battery change without asking, when exactly one match appears within an hour. Otherwise you are asked in Repairs."
       }
     }
   }
