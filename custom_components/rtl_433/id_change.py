@@ -4,8 +4,8 @@ Many cheap 433 MHz sensors pick a fresh random id whenever their batteries are
 pulled. rtl_433 keys a device on that id, so after a battery swap the sensor
 turns up as a brand-new *pending* candidate while the device the user added goes
 quiet for good. :mod:`.device_replace` already re-keys a device onto a new id
-without losing its history; this module offers that through a repair notice
-that always requires the user to confirm the physical device.
+without losing its history; this module decides **when to offer that**, and --
+for devices the user has opted in -- does it without asking.
 
 rtl_433 cannot tell a replacement from a new device, so nothing here is a proof.
 What makes a battery swap recognisable is that every clue lines up at once, and
@@ -32,9 +32,17 @@ What makes a battery swap recognisable is that every clue lines up at once, and
   sensors changing batteries at once is precisely when guessing would be wrong,
   so that case is left alone.
 
-A match raises a fixable repair naming the device and the possible new id.
-Confirming it runs the existing replace implementation. These clues cannot prove
-physical identity, so the user must check the device before confirming.
+What happens to a match depends on the device's :data:`.const.DEVICE_AUTO_REPLACE`
+setting. Off (the default): a fixable repair issue names the device, its old id
+and the new one, and confirming it runs the replace. On: the replace runs
+straight away -- but only when the candidate first appeared within
+:data:`FOLLOW_WINDOW` of the old device's last frame, as it does when batteries
+are changed. Silence has no upper bound, so without that limit a sensor that died
+months ago would be paired with whichever identical sensor turned up next, a
+neighbour's for instance. A longer (or, after a restart, unknown) gap still
+raises the repair, so a device re-batteried long after it died is offered, not
+taken. Either way, a successful replace fires :data:`EVENT_DEVICE_ID_CHANGED` so
+an automation can tell the user.
 
 Evaluation is cheap and purely in memory, so it runs whenever the pending list
 changes (a new candidate) and on a short interval (a device's silence crossing
@@ -59,7 +67,14 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_DEVICES, CONF_MODEL, DOMAIN, LOGGER, signal_pending_update
+from .const import (
+    CONF_DEVICES,
+    CONF_MODEL,
+    DEVICE_AUTO_REPLACE,
+    DOMAIN,
+    LOGGER,
+    signal_pending_update,
+)
 from .device_replace import DeviceReplaceError, async_replace_device
 
 if TYPE_CHECKING:
@@ -88,13 +103,18 @@ TEMPERATURE_TOLERANCE_C: Final = 10.0
 # days.
 HUMIDITY_TOLERANCE: Final = 20.0
 
+# Automatic follows only: the longest gap between the old device's last frame and
+# the candidate's first. A battery swap takes minutes; an hour covers a swap
+# interrupted by a trip to the shops, and anything longer is asked about instead.
+FOLLOW_WINDOW: Final = timedelta(hours=1)
+
 # How often the silence side is re-evaluated.
 EVALUATE_INTERVAL: Final = timedelta(minutes=1)
 
 # translation_key / issue_id prefix of the "looks like it changed its id" issue.
 ISSUE_ID_CHANGED: Final = "device_id_changed"
 
-# Fired on the bus after a user confirms a replacement.
+# Fired on the bus after every successful follow, automatic or confirmed.
 EVENT_DEVICE_ID_CHANGED: Final = f"{DOMAIN}_device_id_changed"
 
 
@@ -110,6 +130,11 @@ class IdChange:
     # Old device's last frame -> candidate's first; ``None`` when the old device
     # has not been heard since the hub connected (a restart), so it is unknown.
     gap: timedelta | None = None
+
+    @property
+    def may_follow_automatically(self) -> bool:
+        """Whether the gap is short enough to follow without asking."""
+        return self.gap is not None and self.gap <= FOLLOW_WINDOW
 
 
 def _kind(model: str, key: str) -> tuple[str, ...] | None:
@@ -286,6 +311,8 @@ async def async_follow_id_change(
     entry: ConfigEntry,
     old_key: str,
     new_key: str,
+    *,
+    automatic: bool,
 ) -> None:
     """Re-key ``old_key`` onto ``new_key`` and announce it on the bus.
 
@@ -299,10 +326,11 @@ async def async_follow_id_change(
     name = _device_name(hass, entry, old_key)
     await async_replace_device(hass, entry, old_key, new_key)
     LOGGER.info(
-        "rtl_433 %s changed its transmitter id (%s -> %s)",
+        "rtl_433 %s changed its transmitter id (%s -> %s)%s",
         name,
         old_key,
         new_key,
+        "; followed automatically" if automatic else "",
     )
     hass.bus.async_fire(
         EVENT_DEVICE_ID_CHANGED,
@@ -312,7 +340,7 @@ async def async_follow_id_change(
             "name": name,
             "old_key": old_key,
             "new_key": new_key,
-            "automatic": False,
+            "automatic": automatic,
         },
     )
 
@@ -328,11 +356,22 @@ def async_track_id_changes(
     card is simply raised again once the candidate has been re-heard.
     """
     raised: set[str] = set()
+    following: set[str] = set()
 
     @callback
     def _evaluate(*_: Any) -> None:
+        if following:
+            return  # a replace (and the reload behind it) is already on its way
         live: set[str] = set()
         for change in find_id_changes(entry, coordinator, dt_util.utcnow()):
+            record = entry.data.get(CONF_DEVICES, {}).get(change.old_key, {})
+            if record.get(DEVICE_AUTO_REPLACE) and change.may_follow_automatically:
+                following.add(change.old_key)
+                hass.async_create_task(
+                    _async_follow_automatically(change),
+                    f"rtl_433 follow id change {change.old_key}",
+                )
+                return
             issue_id = _issue_id(entry, change.old_key)
             live.add(issue_id)
             ir.async_create_issue(
@@ -354,6 +393,20 @@ def async_track_id_changes(
             ir.async_delete_issue(hass, DOMAIN, issue_id)
         raised.clear()
         raised.update(live)
+
+    async def _async_follow_automatically(change: IdChange) -> None:
+        try:
+            await async_follow_id_change(
+                hass, entry, change.old_key, change.new_key, automatic=True
+            )
+        except DeviceReplaceError as err:
+            following.discard(change.old_key)
+            LOGGER.warning(
+                "rtl_433 could not follow %s to %s: %s",
+                change.old_key,
+                change.new_key,
+                err,
+            )
 
     unsubs = [
         async_dispatcher_connect(
@@ -389,13 +442,7 @@ class DeviceIdChangedRepairFlow(RepairsFlow):
     async def async_step_confirm(self, user_input: dict[str, Any] | None = None) -> Any:
         """Show the pair; on submit, run the replace."""
         if user_input is not None:
-            coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
-            if coordinator is None or not any(
-                change.old_key == self._old_key and change.new_key == self._new_key
-                for change in find_id_changes(
-                    self._entry, coordinator, dt_util.utcnow()
-                )
-            ):
+            if self._old_key not in self._entry.data.get(CONF_DEVICES, {}):
                 return self.async_abort(reason="device_id_change_stale")
             try:
                 await async_follow_id_change(
@@ -403,6 +450,7 @@ class DeviceIdChangedRepairFlow(RepairsFlow):
                     self._entry,
                     self._old_key,
                     self._new_key,
+                    automatic=False,
                 )
             except DeviceReplaceError:
                 return self.async_abort(reason="device_id_change_failed")

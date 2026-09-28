@@ -3,12 +3,12 @@
 A battery swap gives many 433 MHz sensors a new random id, so the device the user
 added goes quiet while an identical-looking candidate appears in the pending
 list. :mod:`custom_components.rtl_433.id_change` pairs the two -- only when every
-clue agrees and the pairing is unambiguous -- and raises a fixable repair
-requiring user confirmation.
+clue agrees and the pairing is unambiguous -- and then either raises a fixable
+repair or, for a device that opted in, re-keys it straight away.
 
 The matcher is exercised directly against a real coordinator whose runtime maps
 are set by hand, because what matters is the decision on each combination of
-clues. The tracker and the repair flow drive the real
+clues. The tracker, the repair flow and the automatic path drive the real
 ``async_setup_entry`` so the replace underneath is the one users get.
 """
 
@@ -24,19 +24,23 @@ from pytest_homeassistant_custom_component.common import async_capture_events
 from custom_components.rtl_433.const import (
     CONF_DEVICES,
     CONF_MODEL,
+    DEVICE_AUTO_REPLACE,
     DEVICE_FIELDS,
     DOMAIN,
 )
 from custom_components.rtl_433.coordinator import PendingDevice
 from custom_components.rtl_433.id_change import (
     EVENT_DEVICE_ID_CHANGED,
+    FOLLOW_WINDOW,
     HUMIDITY_TOLERANCE,
     ISSUE_ID_CHANGED,
     MIN_SIGHTINGS,
     SILENCE,
     TEMPERATURE_TOLERANCE_C,
+    IdChange,
     find_id_changes,
 )
+from custom_components.rtl_433.settings import build_device_data
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, issue_registry as ir
 from homeassistant.util import dt as dt_util
@@ -129,6 +133,7 @@ async def test_a_battery_swap_is_recognised(hass, hub_entry_builder, no_socket):
     assert changes[0].signal == pytest.approx(18.0)
     # Last heard 20 min ago, candidate first heard 5 min ago.
     assert changes[0].gap == timedelta(minutes=15)
+    assert changes[0].may_follow_automatically
 
 
 async def test_not_while_the_old_device_is_still_talking(
@@ -250,6 +255,19 @@ async def test_a_device_with_no_comparable_reading_matches_on_the_other_clues(
     assert [c.new_key for c in find_id_changes(hub, coordinator, NOW)] == [NEW_KEY]
 
 
+@pytest.mark.parametrize(
+    ("gap", "expected"),
+    [
+        (FOLLOW_WINDOW, True),
+        (FOLLOW_WINDOW + timedelta(seconds=1), False),
+        (None, False),
+    ],
+)
+def test_only_a_short_gap_is_followed_automatically(gap, expected):
+    """Within the window: a battery swap. Longer, or unknown: ask instead."""
+    assert IdChange(OLD_KEY, NEW_KEY, gap=gap).may_follow_automatically is expected
+
+
 async def test_not_when_two_candidates_fit(hass, hub_entry_builder, no_socket):
     """Two plausible successors: guessing would be wrong half the time."""
     hub, coordinator = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: OLD_RECORD})
@@ -309,7 +327,7 @@ async def test_a_device_not_heard_this_session_counts_from_the_connection(
 
 
 # --------------------------------------------------------------------------- #
-# The tracker: suggestions always require user confirmation.        #
+# The tracker: a repair by default, an automatic follow when opted in.        #
 # --------------------------------------------------------------------------- #
 def _issue(hass, hub):
     return ir.async_get(hass).async_get_issue(
@@ -426,6 +444,79 @@ async def test_confirming_a_stale_repair_aborts(hass, hub_entry_builder, no_sock
     assert result["reason"] == "device_id_change_stale"
 
 
+async def test_an_opted_in_device_follows_without_asking(
+    hass, hub_entry_builder, no_socket
+):
+    """``auto_replace`` on: re-keyed straight away, announced, no repair."""
+    hub, coordinator = await _setup_hub(
+        hass,
+        hub_entry_builder,
+        {OLD_KEY: {**OLD_RECORD, DEVICE_AUTO_REPLACE: True}},
+    )
+    fired = async_capture_events(hass, EVENT_DEVICE_ID_CHANGED)
+
+    await _announce(hass, coordinator)
+    await hass.async_block_till_done()
+
+    assert NEW_KEY in hub.data[CONF_DEVICES]
+    assert OLD_KEY not in hub.data[CONF_DEVICES]
+    # The opt-in travels with the device, so the next battery swap is followed too.
+    assert hub.data[CONF_DEVICES][NEW_KEY][DEVICE_AUTO_REPLACE] is True
+    assert _issue(hass, hub) is None
+    assert [e.data["automatic"] for e in fired] == [True]
+
+
+@pytest.mark.parametrize(
+    "quiet_minutes",
+    [
+        # Silent long before the candidate appeared: a dead sensor, maybe a
+        # neighbour's new one -- not a battery swap in progress.
+        5 + FOLLOW_WINDOW.total_seconds() / 60 + 1,
+        # Not heard since a restart: when it went quiet is unknown.
+        None,
+    ],
+)
+async def test_an_opted_in_device_is_asked_about_when_the_gap_is_long(
+    hass, hub_entry_builder, no_socket, quiet_minutes
+):
+    """Auto mode only covers a swap in progress; anything else becomes a repair."""
+    hub, coordinator = await _setup_hub(
+        hass,
+        hub_entry_builder,
+        {OLD_KEY: {**OLD_RECORD, DEVICE_AUTO_REPLACE: True}},
+    )
+    fired = async_capture_events(hass, EVENT_DEVICE_ID_CHANGED)
+
+    await _announce(hass, coordinator, quiet_minutes=quiet_minutes)
+
+    assert OLD_KEY in hub.data[CONF_DEVICES]
+    assert NEW_KEY not in hub.data[CONF_DEVICES]
+    assert _issue(hass, hub) is not None
+    assert fired == []
+
+
+# --------------------------------------------------------------------------- #
+# The setting itself.                                                         #
+# --------------------------------------------------------------------------- #
+async def test_the_switch_is_stored_only_when_on(hass, hub_entry_builder, no_socket):
+    """On stores ``True``; off drops the key; ``None`` leaves it as it was."""
+    hub, _coordinator = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: OLD_RECORD})
+
+    on = build_device_data(
+        hub, OLD_KEY, override=None, calibration=None, auto_replace=True
+    )
+    assert on[CONF_DEVICES][OLD_KEY][DEVICE_AUTO_REPLACE] is True
+
+    hass.config_entries.async_update_entry(hub, data=on)
+    untouched = build_device_data(hub, OLD_KEY, override=None, calibration=None)
+    assert untouched[CONF_DEVICES][OLD_KEY][DEVICE_AUTO_REPLACE] is True
+
+    off = build_device_data(
+        hub, OLD_KEY, override=None, calibration=None, auto_replace=False
+    )
+    assert DEVICE_AUTO_REPLACE not in off[CONF_DEVICES][OLD_KEY]
+
+
 @pytest.mark.parametrize(
     ("gap", "shown"),
     [
@@ -441,59 +532,3 @@ def test_the_gap_reads_naturally_on_the_card(gap, shown):
     from custom_components.rtl_433.id_change import _duration
 
     assert _duration(gap) == shown
-
-
-@pytest.mark.parametrize(
-    "change", ["old_returns", "second_candidate", "ignored", "unloaded"]
-)
-async def test_confirmation_rechecks_the_suggestion(
-    hass, hub_entry_builder, no_socket, change
-):
-    """A dialog opened earlier must not apply a now-stale match."""
-    from custom_components.rtl_433.id_change import DeviceIdChangedRepairFlow
-
-    hub, coordinator = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: OLD_RECORD})
-    await _announce(hass, coordinator)
-    flow = DeviceIdChangedRepairFlow(hub, OLD_KEY, NEW_KEY)
-    flow.hass = hass
-    assert (await flow.async_step_init())["type"] == "form"
-
-    if change == "old_returns":
-        coordinator.last_seen[OLD_KEY] = dt_util.utcnow()
-    elif change == "second_candidate":
-        other = f"{MODEL}-99-ch1"
-        coordinator.pending[other] = _pending(
-            other, first_seen=dt_util.utcnow() - timedelta(minutes=5)
-        )
-    elif change == "ignored":
-        coordinator.pending.pop(NEW_KEY)
-    else:
-        hass.data[DOMAIN].pop(hub.entry_id)
-    fired = async_capture_events(hass, EVENT_DEVICE_ID_CHANGED)
-
-    result = await flow.async_step_confirm({})
-    if change == "unloaded":
-        hass.data[DOMAIN][hub.entry_id] = coordinator
-
-    assert result["type"] == "abort"
-    assert result["reason"] == "device_id_change_stale"
-    assert OLD_KEY in hub.data[CONF_DEVICES]
-    assert NEW_KEY not in hub.data[CONF_DEVICES]
-    assert fired == []
-
-
-async def test_later_ambiguity_withdraws_the_notice(hass, hub_entry_builder, no_socket):
-    """A second candidate withdraws an earlier suggestion without replacing."""
-    hub, coordinator = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: OLD_RECORD})
-    await _announce(hass, coordinator)
-    assert _issue(hass, hub) is not None
-    other = f"{MODEL}-99-ch1"
-    coordinator.pending[other] = _pending(
-        other, first_seen=dt_util.utcnow() - timedelta(minutes=5)
-    )
-    coordinator.emit_pending_update()
-    await hass.async_block_till_done()
-
-    assert _issue(hass, hub) is None
-    assert OLD_KEY in hub.data[CONF_DEVICES]
-    assert NEW_KEY not in hub.data[CONF_DEVICES]

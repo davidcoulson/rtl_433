@@ -236,7 +236,7 @@ export const STRINGS = {
   "settings.data_description.scale":
     "Multiplier on the raw counter, to reach one base unit.",
   "settings.data_description.auto_replace":
-    "Switch this device to its new ID after a battery change without asking, when exactly one match appears. Off: you are asked in Repairs.",
+    "Switch this device to its new ID after a battery change without asking, when exactly one match appears within an hour. Otherwise you are asked in Repairs.",
 };
 
 /**
