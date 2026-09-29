@@ -534,7 +534,7 @@ HUB_SENSORS: tuple[HubSensorDesc, ...] = (
     # ``autolevel`` on (see ``docs/hub-entities.md``). A busy receiver sends
     # these lines several times a second, so both sensors show what the
     # coordinator publishes at most once a minute (``NOISE_PUBLISH_INTERVAL``):
-    # the mean noise estimate and the latest threshold.
+    # the mean of each over that minute.
     HubSensorDesc(
         suffix="noise_level",
         name="Noise level",

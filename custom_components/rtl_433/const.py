@@ -313,8 +313,8 @@ def signal_hub_update(hub_entry_id: str) -> str:
 # estimate arrives as rtl_433 "Auto Level" log lines, which a busy receiver emits
 # several times a second as the estimate jitters by a dB or so. Relaying each one
 # on :data:`SIGNAL_HUB_UPDATE` would re-write every hub entity and fill the
-# recorder, so the coordinator collects those readings and publishes a mean at
-# most once per :data:`NOISE_PUBLISH_INTERVAL` on this separate signal, which
+# recorder, so the coordinator collects those readings and publishes their means
+# at most once per :data:`NOISE_PUBLISH_INTERVAL` on this separate signal, which
 # only the two noise sensors subscribe to.
 SIGNAL_HUB_NOISE: Final = "rtl_433_hub_noise_{hub_entry_id}"
 
