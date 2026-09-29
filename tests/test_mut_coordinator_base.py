@@ -46,7 +46,7 @@ from __future__ import annotations
 from collections import OrderedDict
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from pyrtl_433 import Rtl433Client
 from pyrtl_433.normalizer import DEFAULT_SKIP_KEYS, NormalizedEvent
@@ -56,6 +56,7 @@ from custom_components.rtl_433.const import (
     DEFAULT_AVAILABILITY_TIMEOUT,
     DEFAULT_PATH,
     DEFAULT_PORT,
+    NOISE_PUBLISH_INTERVAL,
     SDR_STORE_VERSION,
     sdr_store_key,
     signal_device_update,
@@ -396,6 +397,9 @@ async def test_a_fresh_coordinator_is_disconnected_and_unstarted(
     assert coordinator._seen_dev_query is None
     assert coordinator._started is False
     assert coordinator._watchdog_unsub is None
+    assert coordinator._noise_unsub is None
+    assert coordinator.noise_level is None
+    assert coordinator.min_level is None
 
 
 async def test_a_fresh_coordinator_manages_no_sdr_settings(hass, make_coordinator):
@@ -428,13 +432,24 @@ async def test_async_start_arms_the_watchdog_for_this_hub(hass, make_coordinator
     with patch(TRACK_INTERVAL) as track:
         await coordinator.async_start()
 
-    track.assert_called_once_with(
-        hass,
-        coordinator._async_watchdog,
-        _WATCHDOG_INTERVAL,
-        name=f"rtl_433 watchdog {coordinator.entry.entry_id}",
-    )
+    # The noise publish is armed alongside it: without it the noise sensors
+    # would show their first reading forever.
+    assert track.call_args_list == [
+        call(
+            hass,
+            coordinator._async_watchdog,
+            _WATCHDOG_INTERVAL,
+            name=f"rtl_433 watchdog {coordinator.entry.entry_id}",
+        ),
+        call(
+            hass,
+            coordinator._async_publish_noise,
+            NOISE_PUBLISH_INTERVAL,
+            name=f"rtl_433 noise {coordinator.entry.entry_id}",
+        ),
+    ]
     assert coordinator._watchdog_unsub is track.return_value
+    assert coordinator._noise_unsub is track.return_value
     assert coordinator._started is True
 
 
@@ -470,7 +485,7 @@ async def test_async_start_is_ignored_once_already_started(
         await coordinator.async_start()
         await coordinator.async_start()
 
-    assert track.call_count == 1
+    assert track.call_count == 2  # the watchdog and the noise publish, once each
     assert client_transport.start.await_count == 1
 
 
@@ -504,13 +519,17 @@ async def test_async_stop_disarms_the_watchdog_and_stops_the_client(
     """
     coordinator = make_coordinator()
     unsub = Mock()
+    noise_unsub = Mock()
     coordinator._watchdog_unsub = unsub
+    coordinator._noise_unsub = noise_unsub
     coordinator._started = True
 
     await coordinator.async_stop()
 
     unsub.assert_called_once_with()
+    noise_unsub.assert_called_once_with()
     assert coordinator._watchdog_unsub is None
+    assert coordinator._noise_unsub is None
     assert coordinator._started is False
     client_transport.stop.assert_awaited_once_with()
 
