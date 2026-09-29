@@ -476,8 +476,8 @@ async def test_a_burst_of_noise_lines_writes_once_per_interval(hass, hub_entry_b
     """Noise lines several times a second become one write a minute: the mean.
 
     Neither the hub-wide update (every other hub entity, the repair checks) nor
-    the recorder sees the burst; the two noise sensors change once, to the mean
-    noise estimate and the latest threshold.
+    the recorder sees the burst; the two noise sensors change once, each to the
+    mean of what arrived.
     """
     hub = await _setup_hub(hass, hub_entry_builder)
     coordinator = _coordinator(hass, hub)
@@ -516,8 +516,9 @@ async def test_a_burst_of_noise_lines_writes_once_per_interval(hass, hub_entry_b
 
     mean = round(sum(burst) / len(burst), 1)
     assert hass.states.get(noise_id).state == str(mean)
-    # The threshold is a setting, not a measurement: the latest one wins.
-    assert hass.states.get(min_id).state == str(round(burst[-1] + 3, 1))
+    # The threshold is averaged too: a snapshot of it jitters like the estimate.
+    min_mean = round(sum(n + 3 for n in burst) / len(burst), 1)
+    assert hass.states.get(min_id).state == str(min_mean)
     assert sorted(changes) == sorted([noise_id, min_id])
     assert hub_updates == []
 

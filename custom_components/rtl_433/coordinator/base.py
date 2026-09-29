@@ -95,6 +95,15 @@ from ._watchdog import _WATCHDOG_INTERVAL, _AvailabilityMixin
 # ``repairs.py`` — keep importing it from the coordinator package unchanged.
 
 
+def _mean_of(samples: list[float], current: float | None) -> float | None:
+    """Consume ``samples`` into their mean (0.1 dB), or keep ``current``."""
+    if not samples:
+        return current
+    mean = round(sum(samples) / len(samples), 1)
+    samples.clear()
+    return mean
+
+
 class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityMixin):
     """HA adapter that owns and drives a :class:`pyrtl_433.Rtl433Client` for one hub.
 
@@ -386,10 +395,11 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         # The client's latest raw pair, as last seen by :meth:`_emit_hub_update`;
         # a callback whose pair differs from it was fired by a noise log line.
         self._noise_raw: tuple[float | None, float | None] = (None, None)
-        # Noise estimates received since the last publish, and the latest
-        # minimum detection level (a threshold, so the latest value, not a mean).
+        # Readings received since the last publish. Both are means when
+        # published: a snapshot of a value that moves every tenth of a second
+        # would graph as noise.
         self._noise_samples: list[float] = []
-        self._min_level_latest: float | None = None
+        self._min_level_samples: list[float] = []
         # What the noise sensors show: updated at most once per
         # ``NOISE_PUBLISH_INTERVAL`` (the first reading at once).
         self._noise_published: float | None = None
@@ -475,7 +485,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         ``-M noise`` periodic report, so this trails :attr:`noise_level`: it
         stays ``None`` until the server actually re-adjusts the threshold, which
         a receiver whose noise floor has settled may never do. Published on the
-        same schedule as :attr:`noise_level`, carrying the latest value.
+        same schedule as :attr:`noise_level`, as the mean of the interval.
         """
         return self._min_level_published
 
@@ -700,7 +710,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         if noise_level is not None:
             self._noise_samples.append(noise_level)
         if min_level is not None:
-            self._min_level_latest = min_level
+            self._min_level_samples.append(min_level)
         if self._noise_published is None and self._min_level_published is None:
             self._publish_noise()
 
@@ -710,13 +720,14 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         self._publish_noise()
 
     def _publish_noise(self) -> None:
-        """Publish the mean noise estimate and the latest threshold, if changed."""
-        noise = self._noise_published
-        if self._noise_samples:
-            mean = sum(self._noise_samples) / len(self._noise_samples)
-            noise = round(mean, 1)
-            self._noise_samples.clear()
-        published = (noise, self._min_level_latest)
+        """Publish the mean of each reading since the last publish, if changed.
+
+        A reading with no new samples keeps its published value.
+        """
+        published = (
+            _mean_of(self._noise_samples, self._noise_published),
+            _mean_of(self._min_level_samples, self._min_level_published),
+        )
         if published == (self._noise_published, self._min_level_published):
             return
         self._noise_published, self._min_level_published = published
@@ -725,7 +736,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
     def _reset_noise(self) -> None:
         """Forget every noise reading: the next connection starts afresh."""
         self._noise_samples.clear()
-        self._min_level_latest = None
+        self._min_level_samples.clear()
         self._noise_published = None
         self._min_level_published = None
 

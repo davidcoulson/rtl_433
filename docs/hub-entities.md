@@ -69,11 +69,10 @@ debugging:
 rtl_433 can send these readings several times a second: the estimate jitters
 by a dB or so, and every move of more than 1 dB produces a new line. Writing
 each one would flood the recorder, so the integration collects them and updates
-both sensors at most **once a minute**. **Noise level** shows the mean of the
-estimates received during that minute, which is the steadier figure for spotting
-a noise floor that creeps up. **Minimum detection level** shows the latest
-threshold. The first reading after Home Assistant connects is shown straight
-away.
+both sensors at most **once a minute**. Each shows the mean of the readings
+received during that minute, which is the steadier figure for spotting a noise
+floor that creeps up. The first reading after Home Assistant connects is shown
+straight away.
 
 Unlike the sensors below, this data arrives over the event stream itself
 (rtl_433 ≥ 23.11), so it works even when `/cmd` is proxied away behind a
