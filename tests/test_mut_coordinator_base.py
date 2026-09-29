@@ -65,6 +65,7 @@ from custom_components.rtl_433.const import (
 from custom_components.rtl_433.coordinator import Rtl433Coordinator
 from custom_components.rtl_433.coordinator._events import PendingDevice
 from custom_components.rtl_433.coordinator._watchdog import _WATCHDOG_INTERVAL
+from custom_components.rtl_433.coordinator.base import _mean_of
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
@@ -1124,3 +1125,20 @@ async def test_forgetting_a_device_also_withdraws_it_as_a_candidate(
         coordinator.forget_device(_KEY)
 
     assert coordinator.pending == {}
+
+
+def test_mean_of_consumes_the_samples_into_a_rounded_mean():
+    """The published figure is the mean to 0.1 dB, and the samples are used up."""
+    samples = [-20.0, -22.15, -21.0]
+    assert _mean_of(samples, -30.0) == -21.1
+    assert samples == []
+
+
+def test_mean_of_keeps_the_current_value_when_nothing_arrived():
+    """A quiet interval leaves the sensor where it was, not unknown."""
+    assert _mean_of([], -21.3) == -21.3
+    assert _mean_of([], None) is None
+
+
+def test_mean_of_a_single_sample_is_that_sample():
+    assert _mean_of([-18.44], None) == -18.4
