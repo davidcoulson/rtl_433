@@ -65,7 +65,7 @@ from custom_components.rtl_433.const import (
 from custom_components.rtl_433.coordinator import Rtl433Coordinator
 from custom_components.rtl_433.coordinator._events import PendingDevice
 from custom_components.rtl_433.coordinator._watchdog import _WATCHDOG_INTERVAL
-from custom_components.rtl_433.coordinator.base import _mean_of
+from custom_components.rtl_433.coordinator.base import _TimeWeightedMean
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import dt as dt_util
 
@@ -1127,18 +1127,58 @@ async def test_forgetting_a_device_also_withdraws_it_as_a_candidate(
     assert coordinator.pending == {}
 
 
-def test_mean_of_consumes_the_samples_into_a_rounded_mean():
-    """The published figure is the mean to 0.1 dB, and the samples are used up."""
-    samples = [-20.0, -22.15, -21.0]
-    assert _mean_of(samples, -30.0) == -21.1
-    assert samples == []
+def test_time_weighted_mean_weights_each_value_by_how_long_it_held():
+    """-21 for 50 s then -27 for 10 s is -22, not the -24 a per-line mean gives."""
+    m = _TimeWeightedMean()
+    m.set(-21.0, 0.0)
+    m.set(-27.0, 50.0)
+    assert m.take(60.0) == -22.0
 
 
-def test_mean_of_keeps_the_current_value_when_nothing_arrived():
-    """A quiet interval leaves the sensor where it was, not unknown."""
-    assert _mean_of([], -21.3) == -21.3
-    assert _mean_of([], None) is None
+def test_time_weighted_mean_restarts_each_interval_from_the_held_value():
+    """The next interval starts at the take, carrying the value still in effect."""
+    m = _TimeWeightedMean()
+    m.set(-20.0, 0.0)
+    assert m.take(60.0) == -20.0
+    m.set(-26.0, 90.0)  # -20 for 30 s of this interval, then -26 for 30 s
+    assert m.take(120.0) == -23.0
 
 
-def test_mean_of_a_single_sample_is_that_sample():
-    assert _mean_of([-18.44], None) == -18.4
+def test_time_weighted_mean_re_setting_the_same_value_changes_nothing():
+    """Re-stating an unchanged value (a noise-only line's threshold) adds no weight."""
+    m = _TimeWeightedMean()
+    m.set(-18.0, 0.0)
+    for t in range(5, 10):
+        m.set(-18.0, float(t))
+    m.set(-24.0, 10.0)
+    assert m.take(60.0) == -23.0  # (-18 x 10 s + -24 x 50 s) / 60 s
+
+
+def test_time_weighted_mean_of_a_value_set_at_the_take_is_that_value():
+    """No time has passed (the first reading, published at once): the value itself."""
+    m = _TimeWeightedMean()
+    m.set(-18.44, 5.0)
+    assert m.take(5.0) == -18.4
+
+
+def test_time_weighted_mean_is_none_until_something_is_set():
+    m = _TimeWeightedMean()
+    assert m.take(10.0) is None
+    assert m.value is None
+
+
+def test_time_weighted_mean_ignores_time_before_the_first_value():
+    """Seconds with nothing in effect neither count nor dilute the mean."""
+    m = _TimeWeightedMean()
+    m.take(0.0)
+    m.set(-30.0, 40.0)
+    m.set(-20.0, 50.0)
+    assert m.take(60.0) == -25.0
+
+
+def test_time_weighted_mean_handles_intervals_under_a_second():
+    """A sub-second interval is still a weighted mean, not just the latest value."""
+    m = _TimeWeightedMean()
+    m.set(-20.0, 0.0)
+    m.set(-30.0, 0.4)
+    assert m.take(0.8) == -25.0
