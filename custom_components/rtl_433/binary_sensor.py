@@ -36,6 +36,7 @@ from .entity import Rtl433Entity, Rtl433HubEntity, async_setup_hub_platform
 
 if TYPE_CHECKING:
     from pyrtl_433.library import FieldDescriptor
+    from pyrtl_433.normalizer import NormalizedEvent
 
     from .coordinator import Rtl433Coordinator
 
@@ -72,8 +73,33 @@ class Rtl433BinarySensor(Rtl433Entity, BinarySensorEntity):
         # ``hass`` is not set yet, so any clear timer is (re)started in
         # ``async_added_to_hass`` from the seeded ``is_on``.
         last_event = coordinator.devices.get(device_key)
-        if last_event is not None and descriptor.field_key in last_event.fields:
+        if (
+            last_event is not None
+            and descriptor.field_key in last_event.fields
+            and not self._is_stale_detection(last_event)
+        ):
             self._apply_value(last_event.fields[descriptor.field_key])
+
+    def _is_stale_detection(self, event: NormalizedEvent) -> bool:
+        """Whether ``event`` is an old detection a detect-only sensor must skip.
+
+        A ``clear_delay`` sensor's ``on`` *is* the detection, and its off is
+        synthesized by a timer. A replayed frame or a watchdog repaint of the
+        cached one is not a new detection, so applying it would turn an expired
+        occupancy back on and arm a fresh timer. Steady-state sensors (contacts)
+        keep seeding from replays as before.
+        """
+        return self._descriptor.clear_delay is not None and (
+            event.is_replay or event.is_repaint
+        )
+
+    @callback
+    def _handle_dispatch(self, event: NormalizedEvent) -> None:
+        """Skip stale detections (see :meth:`_is_stale_detection`)."""
+        if self._is_stale_detection(event):
+            self.async_write_ha_state()
+            return
+        super()._handle_dispatch(event)
 
     def _apply_value(self, raw_value: Any) -> None:
         """Map a raw value to on/off via the descriptor's payload mapping.
