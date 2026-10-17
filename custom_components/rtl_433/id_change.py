@@ -445,7 +445,17 @@ class DeviceIdChangedRepairFlow(RepairsFlow):
     async def async_step_confirm(self, user_input: dict[str, Any] | None = None) -> Any:
         """Show the pair; on submit, run the replace."""
         if user_input is not None:
-            if self._old_key not in self._entry.data.get(CONF_DEVICES, {}):
+            # The card may have sat open while the evidence changed: the old
+            # device spoke again, the candidate went away or was added, or a
+            # second candidate appeared. Re-run the matcher on the live state
+            # and act only if it still pairs exactly these two keys.
+            coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+            if coordinator is None or not any(
+                change.old_key == self._old_key and change.new_key == self._new_key
+                for change in find_id_changes(
+                    self._entry, coordinator, dt_util.utcnow()
+                )
+            ):
                 return self.async_abort(reason="device_id_change_stale")
             try:
                 await async_follow_id_change(
