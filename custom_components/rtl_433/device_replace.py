@@ -39,6 +39,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import CONF_DEVICES, CONF_MODEL, DEVICE_FIELDS, DOMAIN
+from .hub_settings import calibration_map_of
 
 
 class DeviceReplaceError(Exception):
@@ -144,8 +145,28 @@ async def async_replace_device(
         merged[CONF_MODEL] = new_rec.get(CONF_MODEL, "")
     devices[new_key] = merged
 
+    # The settings forms keep some per-device settings (the motion clear-delay)
+    # in ``entry.options`` rather than ``entry.data``; move that record the same
+    # way, in the same write. The old device's settings win, as above, so a
+    # stale override already sitting under ``new_key`` is dropped.
+    options = dict(entry.options)
+    if CONF_DEVICES in options:
+        option_devices = {
+            k: dict(v) for k, v in options[CONF_DEVICES].items() if k != new_key
+        }
+        if (old_options := option_devices.pop(old_key, None)) is not None:
+            option_devices[new_key] = old_options
+        options[CONF_DEVICES] = option_devices
+
+    # Step 5 below is the one reload. A moved calibration would otherwise also
+    # make the update listener reload the hub for the write that follows, so
+    # tell it the new calibration map is already accounted for.
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is not None:
+        coordinator.calibration_snapshot = calibration_map_of(devices)
+
     hass.config_entries.async_update_entry(
-        entry, data={**entry.data, CONF_DEVICES: devices}
+        entry, data={**entry.data, CONF_DEVICES: devices}, options=options
     )
 
     # Step 5 -- reload the entry. The platforms rebuild every entity from the
@@ -159,8 +180,7 @@ async def async_replace_device(
     # and ``new_key`` is in the stored devices map by now, so the next frame for
     # it is routed as an adopted device.
     #
-    # The reload is kept even though ``async_update_entry`` may trigger the
-    # update listener itself: reloading twice is harmless, and doing it here
-    # makes the helper correct when called from a context that does not
-    # reload.
+    # The reload is done here, not left to the update listener, because the
+    # listener reloads only for a calibration change and most replacements carry
+    # none; the snapshot update above keeps it from reloading a second time.
     await hass.config_entries.async_reload(entry.entry_id)
