@@ -1413,6 +1413,49 @@ async def test_last_seen_restores_prior_not_baseline(hass, hub_entry_builder):
     assert dt_util.parse_datetime(updated_state.state) != dt_util.parse_datetime(prior)
 
 
+async def test_last_seen_restored_value_survives_replay_and_repaint(
+    hass, hub_entry_builder
+):
+    """A replay or watchdog repaint is not reception: the restored time stays.
+
+    Neither advances the device's genuine reception time, so the sensor must not
+    swap its restored timestamp for the startup baseline in ``last_seen``.
+    """
+    device_key = "Acurite-606TX-42"
+    restore_eid = "sensor.acurite_606tx_42_last_seen"
+    prior = "2026-05-20T08:30:00+00:00"
+    mock_restore_cache(hass, (State(restore_eid, prior),))
+    hub = await _setup_hub(
+        hass,
+        hub_entry_builder,
+        devices={
+            device_key: {CONF_MODEL: "Acurite-606TX", DEVICE_FIELDS: ["temperature_C"]}
+        },
+    )
+    await _enable_entity(hass, hub, restore_eid)
+    coordinator = _coordinator(hass, hub)
+
+    # An old frame, as rtl_433 replays on reconnect: classified stale.
+    _feed(
+        coordinator,
+        {
+            "time": "2026-05-20 08:30:00",
+            "model": "Acurite-606TX",
+            "id": 42,
+            "temperature_C": 21.4,
+        },
+    )
+    await hass.async_block_till_done()
+    assert coordinator.devices[device_key].is_replay
+    state = hass.states.get(restore_eid)
+    assert dt_util.parse_datetime(state.state) == dt_util.parse_datetime(prior)
+
+    await coordinator._async_watchdog(dt_util.utcnow())
+    await hass.async_block_till_done()
+    state = hass.states.get(restore_eid)
+    assert dt_util.parse_datetime(state.state) == dt_util.parse_datetime(prior)
+
+
 async def test_no_last_seen_on_binary_sensor(hass, hub_entry_builder):
     """No Last-seen on the binary_sensor platform; the sensor one still exists."""
     device_key = "GenericDoor-X1-88"
