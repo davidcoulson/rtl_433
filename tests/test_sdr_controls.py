@@ -707,6 +707,57 @@ async def test_select_entity_writes_convert_int_command(
     assert hass.states.get(eid).state == "customary"
 
 
+@pytest.mark.hub_disconnected
+@pytest.mark.parametrize(
+    ("platform", "suffix", "service", "data", "expected"),
+    [
+        pytest.param(
+            "number",
+            "center_frequency",
+            "set_value",
+            {"value": 915},
+            "915.0",
+            id="number",
+        ),
+        pytest.param("switch", "gain_auto", "turn_on", {}, "on", id="switch"),
+        pytest.param(
+            "select",
+            "conversion_mode",
+            "select_option",
+            {"option": "si"},
+            "si",
+            id="select",
+        ),
+    ],
+)
+async def test_an_offline_write_shows_on_the_control(
+    hass, hub_entry_builder, aioclient_mock, platform, suffix, service, data, expected
+):
+    """A control saved while the receiver is down shows the value it saved.
+
+    The value is stored and enforced on reconnect, but the controls only repaint
+    on a hub update and none follows an offline write, so the control kept its
+    old state -- automations reading it saw a value that was no longer intended.
+    """
+    hub = await _setup_hub(hass, hub_entry_builder)  # managed by default
+    coordinator = hass.data[DOMAIN][hub.entry_id]
+    assert not coordinator.connected
+
+    eid = er.async_get(hass).async_get_entity_id(
+        platform, DOMAIN, f"{hub.entry_id}:hub:{suffix}"
+    )
+    assert hass.states.get(eid).state != expected
+
+    aioclient_mock.mock_calls.clear()
+    await hass.services.async_call(
+        platform, service, {"entity_id": eid, **data}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert _setter_queries(aioclient_mock) == []
+    assert hass.states.get(eid).state == expected
+
+
 async def test_no_controls_and_no_cmd_when_unmanaged(
     hass, hub_entry_builder, aioclient_mock
 ):

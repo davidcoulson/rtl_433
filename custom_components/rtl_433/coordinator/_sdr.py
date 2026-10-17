@@ -20,8 +20,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
+from ..const import signal_hub_update
 from ..sdr_settings import (
     KEY_CENTER_FREQUENCY,
     KEY_GAIN_AUTO,
@@ -137,6 +139,10 @@ class _SdrSettingsMixin:
         self._desired[field] = value
         self._managed.add(field)
         await self._persist_desired()
+        # The controls show the desired value, but only repaint on a hub update,
+        # and none follows a write made while disconnected (or one whose
+        # read-back fails). Repaint now, so the control reflects what was saved.
+        async_dispatcher_send(self.hass, signal_hub_update(self.entry.entry_id))
         if self.connected:
             await self._enforce_field(field)
 
