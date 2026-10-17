@@ -156,6 +156,8 @@ export const STRINGS = {
     "Per-device timeout overrides and utility-meter calibration",
   "overview.mappings_description":
     "YAML overrides for how fields become entities",
+  "overview.discovered_description":
+    "Add, ignore or replace the devices this receiver hears",
   "discovered.searching": "Searching for rtl_433 devices…",
   "discovered.hint": "Devices will show up here once discovered.",
   "discovered.show_ignored": "Show ignored devices ({count})",
@@ -589,6 +591,31 @@ export function overviewStatus(states) {
  */
 export function configPagePath(which) {
   return `/config/${which}/dashboard?historyBack=1&domain=${DOMAIN}`;
+}
+
+/**
+ * Which receiver the discovered-devices view should be subscribed to.
+ *
+ * `wanted` is the receivers asked for, most specific first -- the one the path
+ * names, then the `?config_entry=` Home Assistant's Configure link passes. The
+ * first that exists wins; otherwise the current one stays, and with none at all
+ * a loaded hub is preferred, as on first load. A stale id (a receiver removed
+ * since the link was made) is skipped rather than subscribed to.
+ *
+ * Exported so the choice is pinned by a test: with two receivers it decides
+ * whose candidates can be added at all.
+ */
+export function chooseEntry(hubs, wanted, current) {
+  const known = (id) => Boolean(id) && hubs.some((hub) => hub.entry_id === id);
+  const named = wanted.find(known);
+  if (named) {
+    return named;
+  }
+  if (known(current)) {
+    return current;
+  }
+  const hub = hubs.find((candidate) => candidate.loaded) || hubs[0];
+  return hub ? hub.entry_id : null;
 }
 
 /** mdiArrowLeft, for the toolbar's back control and its native fallback. */
@@ -1292,7 +1319,20 @@ class Rtl433Panel extends HTMLElement {
    * healthy one is the one worth opening on.
    */
   _pickEntry() {
-    return (this._hubs.find((hub) => hub.loaded) || this._hubs[0]).entry_id;
+    let configEntry = null;
+    try {
+      configEntry = new URLSearchParams(window.location.search).get(
+        "config_entry"
+      );
+    } catch (error) {
+      // No location to read: fall through to the first loaded hub.
+    }
+    return chooseEntry(this._hubs, [this._discoveryRouteEntry(), configEntry], null);
+  }
+
+  /** The receiver the path names, when the path is the discovered view. */
+  _discoveryRouteEntry() {
+    return this._viewFor().view === "discovered" ? this._segmentEntry : null;
   }
 
   async _loadHubs(pending) {
@@ -1940,7 +1980,7 @@ class Rtl433Panel extends HTMLElement {
     made.fab = this._buildFab(root.querySelector(".fab-slot"), {
       label: this._t("overview.add_device"),
       icon: ICON_PLUS,
-      onClick: () => this._navigate("discovered"),
+      onClick: () => this._navigate("discovered", { entry: this._entryId }),
     });
 
     return made;
@@ -1987,6 +2027,19 @@ class Rtl433Panel extends HTMLElement {
           supporting: this._t("overview.mappings_description"),
           segment: "mappings",
         },
+        // With one receiver the add button is unambiguous; with several, each
+        // card says whose discovered devices it opens.
+        ...(several
+          ? [
+              {
+                className: "open-discovered",
+                icon: ICON_PLUS,
+                headline: this._t("view.discovered"),
+                supporting: this._t("overview.discovered_description"),
+                segment: "discovered",
+              },
+            ]
+          : []),
       ].map((row) =>
         this._navRow({
           className: row.className,
@@ -2197,6 +2250,18 @@ class Rtl433Panel extends HTMLElement {
     const now = Date.now();
     const view = this._viewFor();
 
+    // `discovered/<entry_id>` names whose candidates to show. The subscription
+    // is per receiver, so following the path means re-subscribing, which
+    // renders on its way through.
+    if (view.view === "discovered" && this._hubs.length && this._entryId) {
+      const wanted = chooseEntry(this._hubs, [this._segmentEntry], this._entryId);
+      if (wanted !== this._entryId) {
+        this._entryId = wanted;
+        this._subscribe();
+        return;
+      }
+    }
+
     // One view is on screen at a time, and the toolbar names it -- which is
     // what makes the back arrow read as "up a level" rather than "leave".
     this._el.viewOverview.hidden = view.view !== "overview";
@@ -2205,7 +2270,18 @@ class Rtl433Panel extends HTMLElement {
     // Through `_text`, so a render that changed nothing writes nothing: this
     // runs on every push from the receiver and on the clock tick, and the title
     // only moves when the view does.
-    this._text(this._el.title, this._t(view.title));
+    // The discovered view is per receiver too; with several, the title says
+    // whose candidates these are.
+    const subscribed =
+      view.view === "discovered" && this._hubs.length > 1
+        ? this._hubs.find((hub) => hub.entry_id === this._entryId)
+        : null;
+    this._text(
+      this._el.title,
+      subscribed
+        ? `${this._t(view.title)} \u2014 ${subscribed.title}`
+        : this._t(view.title)
+    );
 
     if (view.form) {
       this._showSettingsHub();

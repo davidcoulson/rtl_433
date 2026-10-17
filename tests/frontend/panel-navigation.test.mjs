@@ -151,3 +151,29 @@ test("moving between two subviews changes nothing either way", () => {
   assert.equal(pushedAfter("options", "mappings", true, true), true);
   assert.equal(pushedAfter("options", "mappings", false, true), false);
 });
+
+test("the discovered view follows the receiver it is pointed at", async () => {
+  // With two receivers, a candidate heard only by the second could not be
+  // added: the view always subscribed to the first loaded hub, whatever the
+  // path or Home Assistant's Configure link named.
+  const { chooseEntry } = await import(
+    resolve(HERE, "../../custom_components/rtl_433/frontend/rtl_433-panel.js")
+  );
+  const hubs = [
+    { entry_id: "A", loaded: true },
+    { entry_id: "B", loaded: true },
+  ];
+  // The path wins, then the `?config_entry=` query, then the current one.
+  assert.equal(chooseEntry(hubs, ["B", "A"], "A"), "B");
+  assert.equal(chooseEntry(hubs, [null, "B"], null), "B");
+  assert.equal(chooseEntry(hubs, [null, null], "B"), "B");
+  // A stale id falls through rather than subscribing to a removed receiver.
+  assert.equal(chooseEntry(hubs, ["gone", "B"], "A"), "B");
+  assert.equal(chooseEntry(hubs, ["gone"], "gone"), "A");
+  // Nothing named: a loaded hub before one mid-reload, as on first load.
+  assert.equal(
+    chooseEntry([{ entry_id: "A", loaded: false }, hubs[1]], [], null),
+    "B"
+  );
+  assert.equal(chooseEntry([], ["B"], "A"), null);
+});
