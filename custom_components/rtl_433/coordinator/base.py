@@ -182,7 +182,10 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
 
     Runtime state, describing adopted devices only (read by ``diagnostics.py``):
         ``devices``: ``dict[str, NormalizedEvent]`` last event per device key.
-        ``last_seen``: ``dict[str, datetime]`` last-seen (UTC) per device key.
+        ``last_seen``: ``dict[str, datetime]`` last-seen (UTC) per device key,
+            used for availability; entity startup baselines it to "now".
+        ``heard``: ``dict[str, datetime]`` the last *genuine live* reception
+            (UTC) per device key: never the startup baseline, never a replay.
         ``available``: ``dict[str, bool]`` current availability per device key.
         ``seen_fields``: ``set[str]`` every measurement field key ever observed.
         ``device_fields``: ``dict[str, set[str]]`` field keys seen per device.
@@ -338,6 +341,11 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         # and its entities are reading the state held here.
         self.devices: dict[str, NormalizedEvent] = {}
         self.last_seen: dict[str, datetime] = {}
+        # Only real reception lands here. ``last_seen`` also carries the entity
+        # startup baseline (so a restored state shows until the timeout), which
+        # must never pass for a transmission: the Last seen sensor and the
+        # id-change matcher read this map instead.
+        self.heard: dict[str, datetime] = {}
         self.available: dict[str, bool] = {}
         self.seen_fields: set[str] = set()
         self.device_fields: dict[str, set[str]] = {}
@@ -580,6 +588,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         self.pending.pop(device_key, None)
         self.devices.pop(device_key, None)
         self.last_seen.pop(device_key, None)
+        self.heard.pop(device_key, None)
         self.available.pop(device_key, None)
         self.device_fields.pop(device_key, None)
         self._logged_unmapped.pop(device_key, None)
@@ -617,6 +626,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         self._discovered.add(device_key)
         self.devices[device_key] = event
         self.last_seen[device_key] = record.last_seen
+        self.heard[device_key] = record.last_seen
         self.available[device_key] = True
         # Every field seen since this candidate was first heard, not just the
         # ones in the last frame. A weather station splits its readings across

@@ -184,6 +184,7 @@ class _EventProcessingMixin:
         was_available = self.available.get(key)
         if not is_replay:
             self.last_seen[key] = now
+            self.heard[key] = now
             self.available[key] = True
 
         self._maybe_register_device(

@@ -226,7 +226,10 @@ def find_id_changes(
         kind = _kind(model, old_key)
         if kind is None or kind not in candidates:
             continue
-        heard = coordinator.last_seen.get(old_key)
+        # Genuine reception only: ``last_seen`` also holds the entity startup
+        # baseline, which would pass for a transmission and turn the unknown
+        # post-restart gap into a short, auto-followable one.
+        heard = coordinator.heard.get(old_key)
         quiet_since = heard or connected_since
         if quiet_since is None or now - quiet_since < SILENCE:
             continue
