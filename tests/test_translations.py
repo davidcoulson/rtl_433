@@ -104,6 +104,15 @@ def _collect(module: str, source: str) -> _FlowKeys:
             else:
                 found.abort.add(key)
         elif node.func.attr in ("async_show_form", "async_show_menu"):
+            # ``errors={"base": "cannot_connect"}`` -> an ``error`` key too.
+            errors = kwargs.get("errors")
+            if isinstance(errors, ast.Dict):
+                for value in errors.values:
+                    key = _literal(value)
+                    if key is None:
+                        found.dynamic.add(f"{module}: non-literal errors value")
+                    else:
+                        found.error.add(key)
             step = _literal(kwargs.get("step_id"))
             if step is None:
                 found.dynamic.add(f"{module}: non-literal step_id")
@@ -158,6 +167,39 @@ def test_every_flow_key_has_an_english_string(module, section, translations):
     assert keys.step - set(strings.get("step", {})) == set()
     for step, options in keys.menu.items():
         assert options - set(strings["step"][step].get("menu_options", {})) == set()
+
+
+@pytest.mark.parametrize("module", ["repairs.py", "id_change.py"])
+def test_every_repair_flow_key_has_an_english_string(module, translations):
+    """Every abort, error and step a repair fix flow emits is translated.
+
+    Repair flows translate under ``issues.<issue>.fix_flow``, not ``config``, so
+    an error defined only for the config flow renders as a bare key in the
+    repair form. The modules hold several fix flows, so the check is against the
+    union of every issue's strings.
+    """
+    source = _source(module)
+    if _MUTMUT_MARKER in source:
+        pytest.skip(
+            "flow source rewritten by mutmut; this source-driven check runs in "
+            "the normal pytest job only"
+        )
+    keys = _collect(module, source)
+    assert keys.dynamic == set()
+    assert keys.step
+
+    flows = [
+        issue["fix_flow"]
+        for issue in translations["issues"].values()
+        if "fix_flow" in issue
+    ]
+    for kind, harvested in (
+        ("abort", keys.abort),
+        ("error", keys.error),
+        ("step", keys.step),
+    ):
+        known = set().union(*(set(flow.get(kind, {})) for flow in flows))
+        assert harvested - known == set(), kind
 
 
 def test_the_approval_steps_carry_their_form_field_labels(translations):
