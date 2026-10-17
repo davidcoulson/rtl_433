@@ -315,11 +315,10 @@ class Rtl433LastSeenSensor(Rtl433Entity, SensorEntity):
         # disabled-by-default.
         if coordinator.is_event_driven_device(device_key):
             self._attr_entity_registry_enabled_default = True
-        # Seed only when a *real* event has been seen this session; the presence
-        # of a devices-map entry distinguishes a true timestamp from the base's
-        # startup baseline (which never sets coordinator.devices).
-        if coordinator.devices.get(device_key) is not None:
-            self._attr_native_value = coordinator.last_seen.get(device_key)
+        # Seed only when a *real* event has been heard this session:
+        # ``coordinator.heard`` never holds the base's startup baseline or a
+        # replayed frame, unlike ``last_seen``.
+        self._attr_native_value = coordinator.heard.get(device_key)
 
     def _apply_value(self, raw_value: Any) -> None:
         """No-op: the sentinel field_key never appears in an event."""
@@ -359,13 +358,17 @@ class Rtl433LastSeenSensor(Rtl433Entity, SensorEntity):
 
     @callback
     def _handle_dispatch(self, event: NormalizedEvent) -> None:
-        """Adopt the coordinator's last_seen on a real/watchdog dispatch.
+        """Adopt the coordinator's genuine reception time on a dispatch.
 
         Overrides the base: the synthetic field is never in ``event.fields``, so
-        instead of the field-driven path we read coordinator.last_seen, which the
-        non-dispatching baseline never reaches.
+        instead of the field-driven path we read ``coordinator.heard``. A replay
+        or watchdog repaint carries no new reception, so a restored timestamp is
+        kept until a live frame is actually heard (``last_seen`` would hand back
+        the startup baseline instead).
         """
-        self._attr_native_value = self._coordinator.last_seen.get(self._device_key)
+        heard = self._coordinator.heard.get(self._device_key)
+        if heard is not None:
+            self._attr_native_value = heard
         self.async_write_ha_state()
 
     @property
