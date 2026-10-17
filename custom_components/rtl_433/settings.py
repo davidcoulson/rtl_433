@@ -118,6 +118,23 @@ def build_hub_options(
     return options
 
 
+def build_hub_data(entry: ConfigEntry) -> dict[str, Any] | None:
+    """Return ``entry.data`` without a leftover hub timeout, or ``None``.
+
+    The resolver reads ``entry.options`` first and falls back to ``entry.data``,
+    so a timeout left in data outlives every save that means "use the
+    per-device-type defaults" -- the option is dropped and the data copy takes
+    over again. A hub save always states the user's choice in options, so the
+    data copy is retired on the first one. ``None`` when there is nothing to
+    retire, so a caller can skip the write.
+    """
+    if CONF_AVAILABILITY_TIMEOUT not in entry.data:
+        return None
+    data = dict(entry.data)
+    del data[CONF_AVAILABILITY_TIMEOUT]
+    return data
+
+
 def entry_registry(hass: HomeAssistant, entry: ConfigEntry) -> Registry | None:
     """Return this hub's merged device-library registry, cached at setup.
 

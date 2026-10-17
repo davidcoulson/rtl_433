@@ -90,6 +90,7 @@ from .settings import (
     MAPPINGS_DOCS_URL,
     build_device_data,
     build_device_options,
+    build_hub_data,
     build_hub_options,
     build_mappings_data,
     device_defaults,
@@ -396,6 +397,12 @@ class Rtl433OptionsFlow(OptionsFlow):
         """
         if user_input is not None:
             submitted = user_input[CONF_AVAILABILITY_TIMEOUT]
+            # A flow can only finish with options, so a leftover data copy is
+            # retired by a write of its own; it happens at most once per hub.
+            if (data := build_hub_data(self.config_entry)) is not None:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry, data=data
+                )
             return self.async_create_entry(
                 title="",
                 data=build_hub_options(

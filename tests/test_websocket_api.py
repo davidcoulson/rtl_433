@@ -72,6 +72,7 @@ from custom_components.rtl_433.const import (
     DEVICE_TIMEOUT_OVERRIDE,
     DOMAIN,
 )
+from custom_components.rtl_433.hub_settings import _explicit_hub_timeout
 from homeassistant.components.frontend import DATA_PANELS
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.data_entry_flow import FlowResultType
@@ -1390,6 +1391,35 @@ async def test_settings_get_answers_with_what_the_three_forms_render(
     # Nothing overridden yet -> an empty editor, not a document holding "{}".
     assert result["mappings"] == ""
     assert result["mappings_docs_url"].startswith("https://")
+
+
+async def test_choosing_the_defaults_retires_a_timeout_left_in_data(
+    hass, settings_hub, hass_ws_client
+):
+    """ "Defaults" has to win over a hub timeout an older build left in data.
+
+    The resolver reads options first and falls back to ``entry.data``, so
+    dropping only the option handed the hub straight back to the data copy --
+    the save succeeded and nothing changed.
+    """
+    assert settings_hub.data[CONF_AVAILABILITY_TIMEOUT] == 600
+    client = await hass_ws_client(hass)
+
+    reply, _ = await _call(
+        client,
+        {
+            "type": "rtl_433/settings/hub",
+            "entry_id": settings_hub.entry_id,
+            CONF_AVAILABILITY_TIMEOUT: None,
+            CONF_MANAGE_SETTINGS: True,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert reply["success"] is True
+    assert CONF_AVAILABILITY_TIMEOUT not in settings_hub.data
+    assert _explicit_hub_timeout(settings_hub) is None
+    assert reply["result"][CONF_AVAILABILITY_TIMEOUT] is None
 
 
 async def test_the_hub_timeout_is_dropped_only_when_the_panel_says_none(

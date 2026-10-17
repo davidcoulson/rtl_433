@@ -56,6 +56,7 @@ from custom_components.rtl_433.const import (
 )
 from custom_components.rtl_433.coordinator import PendingDevice
 from custom_components.rtl_433.device_replace import DeviceReplaceError
+from custom_components.rtl_433.hub_settings import _explicit_hub_timeout
 from custom_components.rtl_433.options_flow import (
     CONF_ADD_DEVICES,
     CONF_DEVICE,
@@ -1430,6 +1431,36 @@ async def test_hub_step_keeps_the_per_device_options_it_does_not_own(
 
     assert entry.options[CONF_DEVICES] == {MOTION_KEY: {DEVICE_MOTION_CLEAR_DELAY: 42}}
     assert entry.options[CONF_AVAILABILITY_TIMEOUT] == 1800
+
+
+@pytest.mark.parametrize(
+    ("submitted", "effective"),
+    [
+        pytest.param(DEFAULT_AVAILABILITY_TIMEOUT, None, id="defaults"),
+        pytest.param(1800, 1800, id="a_number"),
+    ],
+)
+async def test_hub_step_retires_a_timeout_left_in_data(
+    hass, hub_entry_builder, submitted, effective
+):
+    """A save states the hub timeout in options, so a data copy must not outlive it.
+
+    The resolver falls back to ``entry.data``. Choosing the per-device-type
+    defaults dropped only the option, so a timeout left in data took over again
+    and event-driven devices kept expiring on it.
+    """
+    entry = hub_entry_builder(availability_timeout=42)
+    entry.add_to_hass(hass)
+
+    result = await _menu(hass, entry, "hub")
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_AVAILABILITY_TIMEOUT: submitted, CONF_MANAGE_SETTINGS: True},
+    )
+    await hass.async_block_till_done()
+
+    assert CONF_AVAILABILITY_TIMEOUT not in entry.data
+    assert _explicit_hub_timeout(entry) == effective
 
 
 # --------------------------------------------------------------------------- #
