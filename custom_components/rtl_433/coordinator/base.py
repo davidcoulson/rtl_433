@@ -644,7 +644,14 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         event = record.event
         self.adopted.add(device_key)
         self._discovered.add(device_key)
-        self.devices[device_key] = event
+        # Seeded with every reading accumulated while pending, the last frame's
+        # winning: the union below creates an entity for a field the last frame
+        # did not carry, and without its value that entity would read unknown
+        # until the field next happened to be sent. The flags are the last
+        # frame's, so a replayed frame still fires nothing.
+        self.devices[device_key] = dataclasses.replace(
+            event, fields={**record.fields, **event.fields}
+        )
         self.last_seen[device_key] = record.last_seen
         self.heard[device_key] = record.last_seen
         self.available[device_key] = True
