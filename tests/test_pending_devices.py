@@ -35,6 +35,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from freezegun import freeze_time
+from pyrtl_433.client import _STOP
 from pyrtl_433.normalizer import NormalizedEvent
 import pytest
 
@@ -406,3 +407,38 @@ async def test_ignore_device_drops_the_candidate_and_bars_its_return(
     assert coordinator.pending == {}
     assert _KEY not in coordinator.devices
     dispatch.assert_not_called()
+
+
+async def test_sustained_traffic_retains_no_events_in_the_client(
+    make_coordinator,
+):
+    """Frames go to the callback only; none pile up in the client's queue.
+
+    pyrtl_433 also queues every event for its async iterator, which the
+    coordinator never reads. Driven through the real client seam, for pending,
+    ignored, adopted and replayed traffic alike.
+    """
+    coordinator = make_coordinator(adopted={_KEY}, ignored={"Acurite-606TX-7"})
+    client = coordinator._client
+    for n in range(1000):
+        for ident in (42, 7, 99):
+            client._process_event(
+                {"model": _MODEL, "id": ident, "temperature_C": n / 10}
+            )
+        client._process_event(
+            {
+                "time": "2026-01-01 00:00:00",
+                "model": _MODEL,
+                "id": 42,
+                "temperature_C": 1.0,
+            }
+        )
+
+    assert client._queue.qsize() == 0
+    assert list(coordinator.pending) == ["Acurite-606TX-99"]
+    assert coordinator.pending["Acurite-606TX-99"].count == 1000
+
+    # The iterator's stop sentinel (what ``stop()`` enqueues; ``stop`` itself
+    # is mocked by the conftest) still gets through.
+    client._queue.put_nowait(_STOP)
+    assert [event async for event in client] == []
