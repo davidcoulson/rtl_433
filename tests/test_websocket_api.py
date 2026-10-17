@@ -1772,3 +1772,40 @@ async def test_mappings_that_will_not_store_are_refused_and_change_nothing(
     assert reply["success"] is False, why
     assert reply["error"]["code"] == "invalid_mappings", why
     assert dict(settings_hub.data) == before, why
+
+
+async def test_adoption_seeds_a_reading_the_last_frame_did_not_carry(
+    hass, hub, hass_ws_client
+):
+    """Every reading the candidate accumulated is on its entities after Add.
+
+    A weather station splits its readings across frames. Adoption creates an
+    entity for each field ever seen, but seeded them from the last frame only,
+    so a reading from an earlier frame read ``unknown`` until that field was
+    next transmitted -- for rainfall, possibly hours.
+    """
+    coordinator = _coordinator(hass, hub)
+    key = "Acurite-5n1-77"
+    _hear(coordinator, {"model": "Acurite-5n1", "id": 77, "temperature_C": 21.5})
+    _hear(coordinator, {"model": "Acurite-5n1", "id": 77, "humidity": 55})
+    await hass.async_block_till_done()
+    assert key in coordinator.pending
+
+    client = await hass_ws_client(hass)
+    reply, _ = await _call(
+        client,
+        {"type": "rtl_433/devices/add", "entry_id": hub.entry_id, "device_keys": [key]},
+    )
+    await hass.async_block_till_done()
+    assert reply["success"]
+
+    registry = er.async_get(hass)
+    readings = {
+        unique_id.rsplit(":", 1)[1]: hass.states.get(
+            registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        ).state
+        for unique_id in _device_entity_unique_ids(hass, hub, key)
+        if registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        and not unique_id.endswith(":last_seen")
+    }
+    assert readings == {"T": "21.5", "H": "55.0"}
