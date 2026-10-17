@@ -480,6 +480,11 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
     # Client-backed read-only state                                      #
     # ------------------------------------------------------------------ #
     @property
+    def log_url(self) -> str:
+        """``ws_url`` without its query, which may carry a proxy token."""
+        return self.ws_url.partition("?")[0]
+
+    @property
     def ws_url(self) -> str:
         """Return the configured WebSocket URL for this hub."""
         return self._client.ws_url
@@ -585,7 +590,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
             NOISE_PUBLISH_INTERVAL,
             name=f"rtl_433 noise {self.entry.entry_id}",
         )
-        LOGGER.debug("rtl_433 coordinator started for %s", self.ws_url)
+        LOGGER.debug("rtl_433 coordinator started for %s", self.log_url)
 
     def forget_device(self, device_key: str) -> None:
         """Un-adopt a device, dropping it back to "heard but not approved".
@@ -713,7 +718,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
         self._disconnected_since = None
         self._devices_offline = False
         self._ever_connected = False
-        LOGGER.debug("rtl_433 coordinator stopped for %s", self.ws_url)
+        LOGGER.debug("rtl_433 coordinator stopped for %s", self.log_url)
 
     # ------------------------------------------------------------------ #
     # Client callbacks: hub-state fan-out + connect-edge policy          #
@@ -844,7 +849,7 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
             await self._enforce_all()
         except Exception as err:  # noqa: BLE001 - never break on SDR adopt/enforce
             LOGGER.debug(
-                "rtl_433 SDR adopt/enforce failed for %s: %s", self.ws_url, err
+                "rtl_433 SDR adopt/enforce failed for %s: %s", self.log_url, err
             )
 
     def _maybe_refresh_hub_identity(self) -> None:

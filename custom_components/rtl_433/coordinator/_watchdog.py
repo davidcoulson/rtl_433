@@ -109,11 +109,11 @@ class _AvailabilityMixin:
             LOGGER.info(
                 "rtl_433 lost the connection to %s; reconnecting, and marking "
                 "all %d device(s) behind this hub unavailable until it is back",
-                self.ws_url,
+                self.log_url,
                 self._gated_device_count(),
             )
         else:
-            LOGGER.debug("rtl_433 waiting for the first connection to %s", self.ws_url)
+            LOGGER.debug("rtl_433 waiting for the first connection to %s", self.log_url)
         self._async_sync_hub_availability()
 
     @callback
@@ -124,7 +124,7 @@ class _AvailabilityMixin:
         if since is not None and self._ever_connected:
             LOGGER.info(
                 "rtl_433 reconnected to %s after %.0fs",
-                self.ws_url,
+                self.log_url,
                 (dt_util.utcnow() - since).total_seconds(),
             )
         self._ever_connected = True
@@ -146,7 +146,7 @@ class _AvailabilityMixin:
             LOGGER.info(
                 "rtl_433 connection to %s restored; devices behind this hub are "
                 "available again as they report in",
-                self.ws_url,
+                self.log_url,
             )
         async_dispatcher_send(self.hass, signal_hub_availability(self.entry.entry_id))
 

@@ -355,6 +355,30 @@ def test_reconnect_logs_the_outage_duration_at_info(hass, coordinator, caplog):
     assert "90s" in lines[0]
 
 
+async def test_connection_logs_keep_no_proxy_token(hass, hub_entry_builder, caplog):
+    """The outage and recovery lines name the URL, but not its query.
+
+    Both log at INFO on every routine server restart, and a proxy token in the
+    path's query went into the log with them.
+    """
+    entry = hub_entry_builder(path="/ws?token=hunter2xyz")
+    entry.add_to_hass(hass)
+    coord = Rtl433Coordinator(
+        hass, entry, host="rtl433.local", path="/ws?token=hunter2xyz"
+    )
+    coord._started = True
+    _connect(coord)
+
+    caplog.set_level(logging.DEBUG, logger=_LOGGER_NAME)
+    _drop(coord)
+    _connect(coord)
+
+    assert any("lost the connection" in m for m in caplog.messages)
+    assert any("reconnected to" in m for m in caplog.messages)
+    assert "hunter2xyz" not in caplog.text
+    assert "/ws" in caplog.text
+
+
 async def test_first_connect_is_not_reported_as_a_recovery(
     hass, hub_entry_builder, caplog
 ):
