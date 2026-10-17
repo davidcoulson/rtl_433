@@ -92,8 +92,13 @@ def _calibration_map(entry: ConfigEntry) -> dict[str, dict]:
     listener; comparing the normalized maps means only a real calibration change
     (never a routine devices-map upsert) is treated as a change.
     """
+    return calibration_map_of(entry.data.get(CONF_DEVICES, {}))
+
+
+def calibration_map_of(devices: dict[str, Any]) -> dict[str, dict]:
+    """:func:`_calibration_map` over a devices map not yet written to the entry."""
     result: dict[str, dict] = {}
-    for device_key, record in entry.data.get(CONF_DEVICES, {}).items():
+    for device_key, record in devices.items():
         if not isinstance(record, dict):
             continue
         calibration = normalize_calibration(record.get(DEVICE_CALIBRATION))

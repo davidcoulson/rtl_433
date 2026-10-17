@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -40,6 +41,7 @@ from custom_components.rtl_433.device_replace import (
     DeviceReplaceError,
     async_replace_device,
 )
+from custom_components.rtl_433.settings import device_clear_delay
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 MODEL = "Acurite-986"
@@ -202,6 +204,54 @@ async def test_replace_folds_settings_onto_new_key(hass, hub_entry_builder, no_s
 
     # ``fields`` alone is unioned, and sorted.
     assert record[DEVICE_FIELDS] == ["battery_ok", "temperature_C"]
+
+
+async def test_replace_moves_the_settings_stored_in_options(
+    hass, hub_entry_builder, no_socket
+):
+    """A clear-delay saved through today's forms lives in options; it moves too.
+
+    The survivor's setting wins over a stale override already under the new key.
+    """
+    hub = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: {CONF_MODEL: MODEL}})
+    hass.config_entries.async_update_entry(
+        hub,
+        options={
+            **hub.options,
+            CONF_DEVICES: {
+                OLD_KEY: {DEVICE_MOTION_CLEAR_DELAY: 15},
+                NEW_KEY: {DEVICE_MOTION_CLEAR_DELAY: 99},
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    await async_replace_device(hass, hub, OLD_KEY, NEW_KEY)
+    await hass.async_block_till_done()
+
+    assert device_clear_delay(hub, NEW_KEY) == 15
+    assert hub.options[CONF_DEVICES] == {NEW_KEY: {DEVICE_MOTION_CLEAR_DELAY: 15}}
+
+
+@pytest.mark.parametrize(
+    "record",
+    [OLD_RECORD, {CONF_MODEL: MODEL, DEVICE_FIELDS: ["temperature_C"]}],
+    ids=["calibrated", "uncalibrated"],
+)
+async def test_replace_reloads_the_hub_once(hass, hub_entry_builder, no_socket, record):
+    """One replacement, one reload -- a moved calibration included."""
+    hub = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: record})
+
+    with patch.object(
+        hass.config_entries,
+        "async_reload",
+        wraps=hass.config_entries.async_reload,
+    ) as reload:
+        await async_replace_device(hass, hub, OLD_KEY, NEW_KEY)
+        await hass.async_block_till_done()
+
+    assert reload.call_count == 1
+    assert NEW_KEY in hub.data[CONF_DEVICES]
 
 
 async def test_replace_adopts_new_key_with_no_record(
