@@ -449,6 +449,50 @@ async def test_confirming_a_stale_repair_aborts(hass, hub_entry_builder, no_sock
     assert result["reason"] == "device_id_change_stale"
 
 
+def _old_speaks_again(coordinator):
+    coordinator.last_seen[OLD_KEY] = coordinator.heard[OLD_KEY] = dt_util.utcnow()
+
+
+def _candidate_cleared(coordinator):
+    coordinator.pending.clear()
+
+
+def _candidate_ignored(coordinator):
+    coordinator.ignore_device(NEW_KEY)
+
+
+def _second_candidate(coordinator):
+    other = "Acurite-606TX-77-ch1"
+    coordinator.pending[other] = _pending(other)
+    coordinator.pending[other].first_seen = coordinator.pending[NEW_KEY].first_seen
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_old_speaks_again, _candidate_cleared, _candidate_ignored, _second_candidate],
+)
+async def test_an_open_repair_rechecks_the_pair_before_replacing(
+    hass, hub_entry_builder, no_socket, change
+):
+    """The evidence changed while the card was open: abort, move nothing."""
+    from custom_components.rtl_433.repairs import async_create_fix_flow
+
+    hub, coordinator = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: OLD_RECORD})
+    await _announce(hass, coordinator)
+    issue = _issue(hass, hub)
+    flow = await async_create_fix_flow(hass, issue.issue_id, issue.data)
+    flow.hass = hass
+    assert (await flow.async_step_init())["type"] == "form"
+
+    change(coordinator)
+    result = await flow.async_step_confirm({})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "device_id_change_stale"
+    assert OLD_KEY in hub.data[CONF_DEVICES]
+    assert NEW_KEY not in hub.data[CONF_DEVICES]
+
+
 async def test_an_opted_in_device_follows_without_asking(
     hass, hub_entry_builder, no_socket
 ):
