@@ -243,6 +243,10 @@
               "secure": "Connect over wss:// instead of ws:// (for a TLS reverse proxy)."
             }
           }
+        },
+        "error": {
+          "cannot_connect": "Failed to connect. Check the host, port, and path, and that the rtl_433 server is reachable.",
+          "id_in_use": "That radio ID is already used by another configured hub."
         }
       }
     },
