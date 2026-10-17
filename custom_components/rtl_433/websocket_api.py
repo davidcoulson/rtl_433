@@ -108,6 +108,7 @@ from .settings import (
     MAPPINGS_DOCS_URL,
     build_device_data,
     build_device_options,
+    build_hub_data,
     build_hub_options,
     build_mappings_data,
     device_defaults,
@@ -1020,8 +1021,11 @@ def ws_set_hub_settings(
     if resolved is None:
         return
     entry, _coordinator = resolved
+    # One write for both: a leftover data timeout is retired with the save
+    # (see `build_hub_data`), and unchanged data is no change at all.
     hass.config_entries.async_update_entry(
         entry,
+        data=build_hub_data(entry) or entry.data,
         options=build_hub_options(
             entry, msg[CONF_AVAILABILITY_TIMEOUT], msg[CONF_MANAGE_SETTINGS]
         ),
