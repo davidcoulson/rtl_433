@@ -112,7 +112,9 @@ def _quiet(
     humidity=None,
 ):
     """Leave ``key`` last heard ``minutes`` before NOW, with those readings."""
-    coordinator.last_seen[key] = NOW - timedelta(minutes=minutes)
+    coordinator.last_seen[key] = coordinator.heard[key] = NOW - timedelta(
+        minutes=minutes
+    )
     coordinator.devices[key] = _event(key, temperature, humidity)
 
 
@@ -312,7 +314,7 @@ async def test_a_device_not_heard_this_session_counts_from_the_connection(
 ):
     """After a restart the silence is measured from when the hub connected."""
     hub, coordinator = await _setup_hub(hass, hub_entry_builder, {OLD_KEY: OLD_RECORD})
-    coordinator.last_seen.pop(OLD_KEY, None)
+    coordinator.heard.pop(OLD_KEY, None)  # the startup baseline stays
     coordinator.devices.pop(OLD_KEY, None)
     coordinator.pending[NEW_KEY] = _pending(NEW_KEY)
 
@@ -343,7 +345,9 @@ async def _announce(hass, coordinator, *, quiet_minutes: float | None = 20):
     this session, as after a restart.
     """
     if quiet_minutes is None:
-        coordinator.last_seen.pop(OLD_KEY, None)
+        # Unheard this session; the entity startup baseline in ``last_seen`` is
+        # left exactly as setup wrote it, as in production.
+        coordinator.heard.pop(OLD_KEY, None)
         coordinator._connection_time = dt_util.utcnow() - SILENCE * 2
     else:
         _quiet(coordinator, minutes=quiet_minutes)
@@ -352,6 +356,7 @@ async def _announce(hass, coordinator, *, quiet_minutes: float | None = 20):
     shift = dt_util.utcnow() - NOW
     if quiet_minutes is not None:
         coordinator.last_seen[OLD_KEY] += shift
+        coordinator.heard[OLD_KEY] += shift
     coordinator.pending[NEW_KEY].first_seen += shift
     coordinator.pending[NEW_KEY].last_seen += shift
     coordinator.emit_pending_update()
@@ -386,7 +391,7 @@ async def test_the_repair_clears_when_the_old_device_speaks_again(
     await _announce(hass, coordinator)
     assert _issue(hass, hub) is not None
 
-    coordinator.last_seen[OLD_KEY] = dt_util.utcnow()
+    coordinator.last_seen[OLD_KEY] = coordinator.heard[OLD_KEY] = dt_util.utcnow()
     coordinator.emit_pending_update()
     await hass.async_block_till_done()
 
@@ -492,6 +497,43 @@ async def test_an_opted_in_device_is_asked_about_when_the_gap_is_long(
     assert OLD_KEY in hub.data[CONF_DEVICES]
     assert NEW_KEY not in hub.data[CONF_DEVICES]
     assert _issue(hass, hub) is not None
+    assert fired == []
+
+
+async def test_the_startup_baseline_is_not_a_transmission(
+    hass, hub_entry_builder, no_socket
+):
+    """After a restart the entity baseline must not pass for a known short gap.
+
+    Setup is left exactly as production leaves it: the entities baseline
+    ``last_seen`` to "now" for the never-heard device. A neighbour heard a
+    minute later must still be a repair with an unknown gap, never followed.
+    """
+    hub, coordinator = await _setup_hub(
+        hass,
+        hub_entry_builder,
+        {OLD_KEY: {**OLD_RECORD, DEVICE_AUTO_REPLACE: True}},
+    )
+    fired = async_capture_events(hass, EVENT_DEVICE_ID_CHANGED)
+    assert OLD_KEY in coordinator.last_seen  # the startup baseline
+    assert OLD_KEY not in coordinator.heard
+
+    now = dt_util.utcnow()
+    restart = now - SILENCE - timedelta(minutes=1)
+    coordinator.last_seen[OLD_KEY] = restart
+    coordinator._connection_time = restart
+    coordinator.pending[NEW_KEY] = _pending(
+        NEW_KEY, first_seen=restart + timedelta(minutes=1)
+    )
+
+    changes = find_id_changes(hub, coordinator, now)
+    assert [c.gap for c in changes] == [None]
+
+    coordinator.emit_pending_update()
+    await hass.async_block_till_done()
+    assert OLD_KEY in hub.data[CONF_DEVICES]
+    assert NEW_KEY not in hub.data[CONF_DEVICES]
+    assert _issue(hass, hub).translation_placeholders["gap"] == "an unknown time"
     assert fired == []
 
 
