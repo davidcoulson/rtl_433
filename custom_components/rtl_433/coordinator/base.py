@@ -57,6 +57,7 @@ accepts the pieces it needs as injectable attributes:
 
 from __future__ import annotations
 
+import asyncio
 from collections import OrderedDict
 from collections.abc import Callable
 import dataclasses
@@ -94,6 +95,22 @@ from ._watchdog import _WATCHDOG_INTERVAL, _AvailabilityMixin
 # ``CannotConnect`` is the library's error, re-exported here (and via
 # ``coordinator/__init__.py``) so existing import sites — ``config_flow.py``,
 # ``repairs.py`` — keep importing it from the coordinator package unchanged.
+
+
+class _CallbackOnlyQueue(asyncio.Queue[Any]):
+    """The client's ``async for`` queue, for a consumer that never iterates.
+
+    pyrtl_433 0.4.1 hands every event to ``on_event`` *and* puts it on an
+    unbounded queue backing its async iterator. The coordinator consumes the
+    callback only, so nothing ever drained that queue and every decoded frame
+    stayed in memory for the life of the entry. Events are dropped here; the
+    iterator's stop sentinel still goes through.
+    """
+
+    def put_nowait(self, item: Any) -> None:
+        """Keep everything except an event, which the callback already took."""
+        if not isinstance(item, NormalizedEvent):
+            super().put_nowait(item)
 
 
 class _TimeWeightedMean:
@@ -435,6 +452,9 @@ class Rtl433Coordinator(_SdrSettingsMixin, _EventProcessingMixin, _AvailabilityM
             on_hub_update=self._emit_hub_update,
             event_tz=dt_util.get_default_time_zone(),
         )
+        # Callback-only delivery: see :class:`_CallbackOnlyQueue`. Private API,
+        # like ``_send_cmd``; drop this when the library offers it.
+        self._client._queue = _CallbackOnlyQueue()
 
         # --- Receiver noise (see :meth:`_note_noise_reading`) -----------------
         # The client's latest raw pair, as last seen by :meth:`_emit_hub_update`;
