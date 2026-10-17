@@ -11,6 +11,7 @@ live hub harness (reusing ``_setup_hub`` / ``_feed`` from the lifecycle suite).
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -26,10 +27,12 @@ from custom_components.rtl_433.const import (
     DEVICE_FIELDS,
     DEVICE_MOTION_CLEAR_DELAY,
     DOMAIN,
+    signal_device_update,
 )
 from custom_components.rtl_433.coordinator.base import Rtl433Client
 from custom_components.rtl_433.repairs import ISSUE_MOTION_MOVED
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 from tests.test_lifecycle import _coordinator, _feed, _setup_hub
 
@@ -139,6 +142,39 @@ async def test_retrigger_reschedules_off(hass, hub_entry_builder):
             start + timedelta(seconds=retrigger_at + DEFAULT_MOTION_CLEAR_DELAY + 5)
         )
         async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert hass.states.get(eid).state == "off"
+
+
+@pytest.mark.parametrize("stale", ["replay", "repaint"])
+async def test_a_stale_detection_does_not_turn_motion_back_on(
+    hass, hub_entry_builder, stale
+):
+    """A replayed or repainted old detection is not a new one: off stays off."""
+    hub = await _setup_hub(hass, hub_entry_builder, devices=_motion_devices())
+    coordinator = _coordinator(hass, hub)
+    eid = _motion_eid(hass, hub)
+
+    start = dt_util.utcnow()
+    with freeze_time(start) as frozen:
+        _feed(coordinator, _MOTION_EVENT)
+        await hass.async_block_till_done()
+        assert hass.states.get(eid).state == "on"
+        frozen.move_to(start + timedelta(seconds=DEFAULT_MOTION_CLEAR_DELAY + 5))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert hass.states.get(eid).state == "off"
+
+        if stale == "replay":
+            # rtl_433 re-sends its backlog on reconnect: classified stale.
+            _feed(coordinator, {**_MOTION_EVENT, "time": "2026-01-01 00:00:00"})
+        else:
+            cached = coordinator.devices[_DEVICE_KEY]
+            async_dispatcher_send(
+                hass,
+                signal_device_update(hub.entry_id, _DEVICE_KEY),
+                dataclasses.replace(cached, is_repaint=True),
+            )
         await hass.async_block_till_done()
         assert hass.states.get(eid).state == "off"
 
