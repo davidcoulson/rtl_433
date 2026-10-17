@@ -3037,3 +3037,62 @@ async def test_setup_wires_the_event_time_advisory(hass, hub_entry_builder):
     await hass.async_block_till_done()
 
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+
+
+@pytest.mark.parametrize(
+    "unload_platforms",
+    [{"return_value": False}, {"side_effect": RuntimeError("platform stuck")}],
+    ids=["returns_false", "raises"],
+)
+async def test_failed_platform_unload_keeps_the_coordinator(
+    hass, hub_entry_builder, unload_platforms
+):
+    """A platform that will not unload leaves the runtime its entities read."""
+    from homeassistant.config_entries import ConfigEntryState
+
+    hub = await _setup_hub(hass, hub_entry_builder)
+    coordinator = _coordinator(hass, hub)
+
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", **unload_platforms
+    ):
+        await hass.config_entries.async_unload(hub.entry_id)
+    assert hub.state is ConfigEntryState.FAILED_UNLOAD
+    assert hass.data[DOMAIN][hub.entry_id] is coordinator
+    assert coordinator._started
+
+    # Nothing was torn down, so a later unload still finds it all and cleans up.
+    hub.mock_state(hass, ConfigEntryState.LOADED)
+    assert await hass.config_entries.async_unload(hub.entry_id)
+    await hass.async_block_till_done()
+    assert hub.entry_id not in hass.data[DOMAIN]
+    assert not coordinator._started
+
+
+async def test_failed_platform_setup_stops_the_coordinator(hass, hub_entry_builder):
+    """A setup that fails after the client started does not leave it running."""
+    from homeassistant.config_entries import ConfigEntryState
+
+    hub = hub_entry_builder()
+    hub.add_to_hass(hass)
+    started: list[Rtl433Coordinator] = []
+    real_start = Rtl433Coordinator.async_start
+
+    async def _start(self):
+        started.append(self)
+        await real_start(self)
+
+    with (
+        patch.object(Rtl433Coordinator, "async_start", _start),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            side_effect=RuntimeError("platform broke"),
+        ),
+    ):
+        assert not await hass.config_entries.async_setup(hub.entry_id)
+    await hass.async_block_till_done()
+
+    assert hub.state is ConfigEntryState.SETUP_ERROR
+    assert hub.entry_id not in hass.data.get(DOMAIN, {})
+    assert [c._started for c in started] == [False]

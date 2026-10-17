@@ -379,7 +379,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        # The client is already running; a setup that fails here never reaches
+        # ``async_unload_entry``, so stop it now rather than leak the socket.
+        await coordinator.async_stop()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise
     return True
 
 
@@ -471,9 +478,14 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the hub config entry.
 
-    Stops the coordinator, drops its runtime state, clears any reachability
-    repair issue, and unloads the forwarded entity platforms.
+    Unloads the forwarded entity platforms first; only once they are gone does
+    it stop the coordinator, drop its runtime state and clear any reachability
+    repair issue. A platform that fails to unload leaves the entry in
+    ``FAILED_UNLOAD`` with its entities still alive, and those (and the
+    WebSocket commands) still need a running coordinator to read.
     """
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     coordinator: Rtl433Coordinator | None = hass.data.get(DOMAIN, {}).get(
         entry.entry_id
     )
@@ -482,7 +494,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     hass.data.get(DOMAIN, {}).get(DATA_ENTRY_LIBRARY, {}).pop(entry.entry_id, None)
     repairs.async_clear_hub_unreachable(hass, entry)
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return True
 
 
 async def async_remove_config_entry_device(
