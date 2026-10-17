@@ -17,7 +17,7 @@ from typing import Any
 
 from pyrtl_433.library import Registry, lookup
 
-from homeassistant.components.diagnostics import async_redact_data
+from homeassistant.components.diagnostics import REDACTED, async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
@@ -25,8 +25,36 @@ from .const import CONF_HOST, CONF_PATH, CONF_PORT, DATA_ENTRY_LIBRARY, DOMAIN
 from .coordinator import Rtl433Coordinator
 
 # Keys redacted from the exported connection params. The host can reveal a
-# private network address / hostname, so it is redacted; port/path are benign.
+# private network address / hostname, so it is redacted; the port is benign, and
+# so is the path once its query is gone (see `_redact_path`).
 TO_REDACT = {CONF_HOST}
+
+
+def _redact_path(path: Any) -> Any:
+    """Keep the WebSocket path but redact its query.
+
+    A reverse proxy commonly takes its access token in the query
+    (``/ws?token=...``); the path before it is what helps a diagnosis.
+    """
+    if not isinstance(path, str):
+        return path
+    base, sep, _query = path.partition("?")
+    return f"{base}?{REDACTED}" if sep else base
+
+
+def _redact_title(title: str, host: Any) -> str:
+    """Redact the host from a title, which defaults to ``rtl_433 (<host>)``."""
+    if isinstance(host, str) and host:
+        return title.replace(host, REDACTED)
+    return title
+
+
+def _redact_entry_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Redact the entry data: the host, and the query of the path."""
+    redacted = async_redact_data(data, TO_REDACT)
+    if CONF_PATH in redacted:
+        redacted[CONF_PATH] = _redact_path(redacted[CONF_PATH])
+    return redacted
 
 
 def _resolve_coordinator(
@@ -75,8 +103,8 @@ async def async_get_config_entry_diagnostics(
     diagnostics: dict[str, Any] = {
         "entry": {
             "entry_id": entry.entry_id,
-            "title": entry.title,
-            "data": async_redact_data(dict(entry.data), TO_REDACT),
+            "title": _redact_title(entry.title, entry.data.get(CONF_HOST)),
+            "data": _redact_entry_data(dict(entry.data)),
             "options": dict(entry.options),
         },
     }
@@ -92,7 +120,7 @@ async def async_get_config_entry_diagnostics(
         {
             CONF_HOST: coordinator.host,
             CONF_PORT: coordinator.port,
-            CONF_PATH: coordinator.path,
+            CONF_PATH: _redact_path(coordinator.path),
             "secure": coordinator.secure,
             "ws_url": coordinator.ws_url,
         },

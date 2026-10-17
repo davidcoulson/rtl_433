@@ -299,12 +299,12 @@ async def test_diag_coordinator_absent_entry_block_has_entry_id(
 async def test_diag_coordinator_absent_entry_block_has_title(
     hass: HomeAssistant, hub_entry_builder
 ) -> None:
-    """entry block must include key 'title' with the entry's title value."""
+    """entry block must include key 'title', with the host redacted from it."""
     entry = hub_entry_builder(host="somehost.local")
     entry.add_to_hass(hass)
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert "title" in diag["entry"]
-    assert diag["entry"]["title"] == entry.title
+    assert diag["entry"]["title"] == "rtl_433 (**REDACTED**)"
 
 
 async def test_diag_coordinator_absent_entry_block_has_options(
@@ -873,7 +873,7 @@ async def test_diag_full_structure_coordinator_present(
 
     # entry block
     assert diag["entry"]["entry_id"] == entry.entry_id
-    assert diag["entry"]["title"] == entry.title
+    assert diag["entry"]["title"] == "rtl_433 (**REDACTED**)"
     assert "options" in diag["entry"]
 
     # connection block: host redacted, port/path visible
@@ -914,7 +914,7 @@ async def test_diag_full_structure_coordinator_absent(
     assert diag["coordinator_loaded"] is False
     assert "entry" in diag
     assert diag["entry"]["entry_id"] == entry.entry_id
-    assert diag["entry"]["title"] == entry.title
+    assert diag["entry"]["title"] == "rtl_433 (**REDACTED**)"
     assert "options" in diag["entry"]
     assert diag["entry"]["options"] == {"opt_key": "opt_val"}
     # No runtime blocks

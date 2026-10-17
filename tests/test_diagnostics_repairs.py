@@ -9,9 +9,11 @@ raised only after sustained disconnection and cleared on reconnect.
 from __future__ import annotations
 
 from datetime import timedelta
+import json
 from unittest.mock import AsyncMock, patch
 
 from pyrtl_433 import TimePrecision
+import pytest
 
 from custom_components.rtl_433 import repairs
 from custom_components.rtl_433.const import (
@@ -93,6 +95,38 @@ async def test_diagnostics_redacts_host_and_reports_unmatched(
     coordinator.time_precision = None
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["event_time_precision"] is None
+
+
+@pytest.mark.parametrize("loaded", [True, False], ids=["loaded", "not_loaded"])
+async def test_diagnostics_keep_no_proxy_token_and_no_host(
+    hass: HomeAssistant, hub_entry_builder, loaded
+):
+    """A token in the WebSocket path's query, and the host, stay out of the export.
+
+    A reverse proxy commonly takes its credential as ``/ws?token=...``. The host
+    key was redacted but the path was exported verbatim -- in the entry data and
+    the connection block -- and the default title ``rtl_433 (<host>)`` carried
+    the host the redaction was meant to hide. Checked on the serialized export,
+    so a new field that copies either one fails here too.
+    """
+    entry = hub_entry_builder(host="private-rtl.lan", path="/ws?token=hunter2xyz")
+    entry.add_to_hass(hass)
+    if loaded:
+        coordinator = _FakeCoordinator()
+        coordinator.host = "private-rtl.lan"
+        coordinator.path = "/ws?token=hunter2xyz"
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+
+    exported = json.dumps(diag, default=str)
+    assert "hunter2xyz" not in exported
+    assert "private-rtl.lan" not in exported
+    # The part of the path that helps a diagnosis survives.
+    assert diag["entry"]["data"][CONF_PATH] == "/ws?**REDACTED**"
+    assert diag["entry"]["title"] == "rtl_433 (**REDACTED**)"
+    if loaded:
+        assert diag["connection"][CONF_PATH] == "/ws?**REDACTED**"
 
 
 async def test_diagnostics_when_coordinator_absent(
