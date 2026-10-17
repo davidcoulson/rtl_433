@@ -328,7 +328,8 @@
       "add_device": "Add or replace device",
       "hub_settings_description": "Availability timeout and whether Home Assistant manages the receiver",
       "device_settings_description": "Per-device timeout overrides and utility-meter calibration",
-      "mappings_description": "YAML overrides for how fields become entities"
+      "mappings_description": "YAML overrides for how fields become entities",
+      "discovered_description": "Add, ignore or replace the devices this receiver hears"
     },
     "discovered": {
       "searching": "Searching for rtl_433 devices…",

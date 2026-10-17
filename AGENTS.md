@@ -426,8 +426,11 @@ second implementation.
   `config_panel_domain == DOMAIN` and that no sidebar slot is taken alongside
   it.
 - The frontend passes the entry it was opened for as `?config_entry=<entry_id>`.
-  The panel ignores it and opens on the first loaded hub; with two receivers,
-  Configure on either lands on the same one.
+  The panel opens its discovered view on that receiver (`chooseEntry`): a
+  `discovered/<entry_id>` path wins, then `?config_entry=`, then the current
+  receiver, then the first loaded hub. With several receivers each settings
+  card carries its own *Discovered devices* row and the toolbar names the
+  receiver whose candidates are shown.
 - **The panel draws its own toolbar.** Home Assistant renders no chrome around a
   non-iframe custom panel, and with no sidebar entry there is otherwise no way
   back out on a phone, where the sidebar is closed. The back button is
