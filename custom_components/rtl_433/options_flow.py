@@ -48,7 +48,6 @@ flow); ``Rtl433ConfigFlow.async_get_options_flow`` returns this class.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from pyrtl_433.library import validate_user_mappings
@@ -91,6 +90,7 @@ from .device_replace import DeviceReplaceError, async_replace_device
 from .hub_settings import _hub_ignored_devices
 from .settings import (
     MAPPINGS_DOCS_URL,
+    build_calibrations_data,
     build_device_data,
     build_device_options,
     build_hub_options,
@@ -344,6 +344,8 @@ class Rtl433OptionsFlow(OptionsFlow):
         skips that meter (it can be calibrated later under "Device settings").
         When the queue is empty every answer is written in one entry update -- so
         adding three meters reloads the hub once -- and the flow finishes.
+        Closing the dialog earlier discards those answers; adoption is already
+        persisted, so the devices remain added.
         """
         entry = self.config_entry
         queue = self._adopt_queue or []
@@ -358,8 +360,6 @@ class Rtl433OptionsFlow(OptionsFlow):
                 return await self.async_step_adopt_calibration()
             self._device_key = device_key
             self._calibration_commodity = commodity
-            self._calibration_override = None
-            self._motion_clear_delay = None
             return await self.async_step_calibration()
 
         defaults = device_defaults(self.hass, entry, device_key)
@@ -395,17 +395,9 @@ class Rtl433OptionsFlow(OptionsFlow):
         entry = self.config_entry
         calibrations = self._adopt_calibrations or {}
         if calibrations:
-            # build_device_data() copies entry.data each call; feed each result
-            # back through a stand-in entry so the writes accumulate into one map.
-            data = dict(entry.data)
-            for device_key, calibration in calibrations.items():
-                data = build_device_data(
-                    SimpleNamespace(data=data),
-                    device_key,
-                    override=None,
-                    calibration=calibration,
-                )
-            self.hass.config_entries.async_update_entry(entry, data=data)
+            self.hass.config_entries.async_update_entry(
+                entry, data=build_calibrations_data(entry.data, calibrations)
+            )
         self._adopt_queue = None
         self._adopt_calibrations = None
         return self.async_create_entry(title="", data=dict(entry.options))
@@ -759,8 +751,8 @@ class Rtl433OptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Pick the commodity-constrained base unit + scale for a consumption meter.
 
-        Reached from :meth:`async_step_device_settings` only when a real commodity was
-        chosen. The unit selector is constrained to the units Home Assistant
+        Reached from device settings or the post-adoption prompt when a real
+        commodity was chosen. The unit selector is constrained to the units Home Assistant
         recognizes as convertible for the commodity's device_class, so the
         resulting consumption sensor is Energy-dashboard-eligible. The
         ``{commodity, unit, scale}`` triple is written into the device record and

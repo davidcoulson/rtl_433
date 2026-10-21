@@ -107,12 +107,12 @@
       },
       "adopt_calibration": {
         "title": "Calibrate {device}",
-        "description": "You just added a utility meter ({position} of {total}). Choose what it measures to calibrate its consumption sensor for the Energy dashboard now, or None to leave it unitless; you can calibrate it any time later under Device settings.",
+        "description": "You added a utility meter ({position} of {total}). Check what it measures, then set its unit and conversion factor for the Energy dashboard. Choose None to skip calibration. You can calibrate it later in Device settings.",
         "data": {
-          "commodity": "Meter commodity"
+          "commodity": "What the meter measures"
         },
         "data_description": {
-          "commodity": "What this meter measures. Pick Energy, Gas, or Water to calibrate the consumption sensor (next step) so it works in the Energy dashboard. Pick None to leave it unitless (and clear any existing calibration)."
+          "commodity": "Choose electricity, gas, or water to continue. None skips calibration and keeps the meter added."
         }
       },
       "ignored_devices": {
